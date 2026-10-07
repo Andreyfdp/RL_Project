@@ -1,168 +1,231 @@
-# Batch-Constrained Q-Learning (BCQ) for Offline 2D Navigation
+# Batch-Constrained Q-Learning for Offline 2D Navigation
 
-An end-to-end implementation of **Batch-Constrained Q-Learning (BCQ)** for a custom continuous-control navigation task.
+A complete implementation of **Batch-Constrained Q-Learning (BCQ)** for a custom continuous-control navigation environment.
 
-The project demonstrates the complete offline reinforcement learning pipeline:
+The project demonstrates a full offline reinforcement learning pipeline:
 
-1. build a continuous 2D navigation environment;
-2. collect a fixed dataset with a noisy behavior policy;
-3. stop collecting data;
-4. train BCQ **only from the fixed dataset**;
-5. evaluate the learned policy against random and behavior-policy baselines;
-6. visualize training dynamics, trajectories, success rate, reward, and collisions.
+1. create a continuous 2D navigation environment;
+2. collect a fixed offline dataset using an imperfect behavior policy;
+3. train BCQ using only the collected dataset;
+4. select the best model using evaluation and early stopping;
+5. compare BCQ with Random and Behavior policies;
+6. visualize trajectories, training dynamics, rewards, success rates, and collisions.
 
-The main experimental result is that BCQ improves the reference behavior policy from **76% to 100% success** while reducing the collision rate from **24% to 0%** on the evaluation task.
+The trained BCQ policy achieved:
+
+- **100% success rate**
+- **0% collision rate**
+- **64.398 average reward**
+
+while the behavior policy used to generate the dataset achieved only **76% success** during final evaluation.
 
 <p align="center">
-  <img src="results/trajectory_bcq.png" width="620" alt="BCQ trajectory in the navigation environment">
+  <img src="results/trajectory_bcq.png" width="650" alt="BCQ policy trajectory">
 </p>
 
 ---
 
-## 1. Why BCQ?
-
-Standard off-policy value-based methods can behave poorly in the offline setting because the learned policy may select actions that are poorly represented in the dataset. The critic can assign unrealistically high values to such out-of-distribution actions, and the policy can exploit those errors.
-
-**Batch-Constrained Q-Learning** addresses this problem by restricting action selection to actions that remain close to the behavior distribution represented by the offline dataset.
-
-In this project, BCQ uses three neural components:
-
-- a **conditional VAE** that models dataset actions conditioned on the state;
-- a **perturbation actor** that makes only a small bounded modification to VAE-generated actions;
-- a **double critic** that evaluates candidate actions and reduces value overestimation.
-
-The learned policy therefore searches for high-value actions **inside or close to the support of the offline data**, instead of optimizing freely over the complete continuous action space.
-
----
-
-## 2. Project Pipeline
+## Project Pipeline
 
 ```mermaid
 flowchart LR
-    E[2D Navigation Environment] -->|Behavior policy only| D[Offline Dataset]
-    D -->|s, a, r, s_next, done| B[BCQ Training]
-    B --> V[VAE]
-    V --> P[Perturbation Actor]
-    P --> Q[Double Critic Q1 / Q2]
-    Q --> M[Trained BCQ Policy]
-    M --> X[Evaluation Environment]
-    X --> R[Metrics and Visualizations]
+    A[2D Navigation Environment] --> B[Behavior Policy]
+    B --> C[Offline Dataset]
+    C --> D[BCQ Training]
 
-    style D stroke-width:3px
-    style B stroke-width:3px
-    style M stroke-width:3px
+    D --> E[Conditional VAE]
+    D --> F[Perturbation Actor]
+    D --> G[Double Critic]
+
+    E --> H[Candidate Actions]
+    F --> H
+    G --> I[Best Action Selection]
+    H --> I
+
+    I --> J[Trained BCQ Policy]
+    J --> K[Evaluation]
+    K --> L[Metrics and Visualizations]
 ```
 
-A key design rule is that **the dataset is frozen before BCQ training begins**. Training batches are sampled only from `offline_dataset.npz`.
+The most important constraint is that after the dataset has been created, **BCQ does not collect new training transitions from the environment**.
 
-Periodic environment rollouts are used only for checkpoint selection and early stopping. They are never inserted into the replay dataset and never used directly for gradient updates.
+Training is performed entirely from the fixed offline dataset.
 
 ---
 
-## 3. Environment
+# Environment
 
-The custom environment is a deterministic 2D continuous-control navigation problem implemented in `env.py`.
+The environment is implemented in `env.py`.
 
-### Map
+It is a deterministic 2D continuous-control navigation problem.
+
+The agent starts in the lower-left part of the map and must reach the goal in the upper-right part while avoiding a large central obstacle.
+
+<p align="center">
+  <img src="results/trajectory_behavior.png" width="48%" alt="Behavior policy trajectory">
+  <img src="results/trajectory_bcq.png" width="48%" alt="BCQ policy trajectory">
+</p>
+
+## Environment Parameters
 
 | Parameter | Value |
 |---|---:|
 | Map size | `10 x 10` |
-| Start | `(1.0, 1.0)` |
-| Goal | `(9.0, 9.0)` |
-| Obstacle | rectangle `(4.2, 2.2) -> (5.8, 7.8)` |
+| Start position | `(1.0, 1.0)` |
+| Goal position | `(9.0, 9.0)` |
+| Obstacle | `(4.2, 2.2) -> (5.8, 7.8)` |
 | Agent radius | `0.15` |
 | Goal radius | `0.45` |
-| Maximum episode length | `120` steps |
 | Maximum movement per step | `0.35` |
+| Maximum episode length | `120` |
 
-The central obstacle blocks the direct path between start and goal, so a useful policy must learn to navigate around it.
+---
 
-### State space
+## State Space
 
-The state is a four-dimensional continuous vector:
+The environment state is a four-dimensional continuous vector:
 
 ```text
 [x, y, goal_x - x, goal_y - y]
 ```
 
-or mathematically
+Mathematically:
 
 $$
-s_t = [x_t, y_t, \Delta x_t, \Delta y_t].
+s_t =
+[x_t,\ y_t,\ \Delta x_t,\ \Delta y_t]
 $$
 
-The first two components describe the agent position. The final two give the relative displacement from the current position to the goal.
+where:
 
-### Action space
+- `x`, `y` are the current coordinates of the agent;
+- `goal_x - x` is the horizontal distance to the goal;
+- `goal_y - y` is the vertical distance to the goal.
+
+State dimension:
+
+```text
+4
+```
+
+---
+
+## Action Space
 
 The action is a two-dimensional continuous vector:
 
 $$
-a_t = [a_x, a_y], \qquad a_x,a_y \in [-1,1].
+a_t = [a_x, a_y]
 $$
 
-The environment converts it into movement using
+with:
 
 $$
-p_{t+1} = p_t + 0.35a_t.
+a_x,a_y \in [-1,1]
 $$
 
-Actions are clipped to `[-1, 1]` before execution.
-
-### Reward function
-
-The dense reward is based on progress toward the goal:
+The environment updates the position using:
 
 $$
-r_t = 5(d_t-d_{t+1}) - 0.02,
+p_{t+1}=p_t+0.35a_t
 $$
 
-where $d_t$ is the Euclidean distance from the agent to the goal.
+Actions are clipped to the valid range before execution.
 
-Terminal modifications are:
+Action dimension:
 
-- goal reached: `+10`;
-- collision: `-5`;
-- timeout: episode ends after `120` steps.
-
-This reward encourages short, goal-directed trajectories while explicitly penalizing collisions.
+```text
+2
+```
 
 ---
 
-## 4. Offline Dataset
+## Reward Function
 
-The dataset is generated by `collect_dataset.py` before BCQ training.
+The reward is primarily based on progress toward the goal.
 
-The behavior controller follows one of two waypoint routes around the obstacle:
-
-- lower route with probability `0.7`;
-- upper route with probability `0.3`.
-
-The nominal waypoint direction is deliberately corrupted by Gaussian noise:
+Let:
 
 $$
-\epsilon \sim \mathcal{N}(0, 0.3^2),
+d_t
 $$
 
-and with probability `0.05` the controller executes a completely random action.
+be the distance to the goal before the action and:
 
-This produces a dataset that is useful but imperfect: it contains successful trajectories, suboptimal actions, and collisions.
+$$
+d_{t+1}
+$$
 
-### Reference dataset run
+the distance after the action.
 
-The dataset used for the reported experiment contained:
+The base reward is:
 
-| Statistic | Value |
-|---|---:|
-| Episodes | `1,000` |
-| Transitions | `38,751` |
-| Behavior success during collection | `81.0%` |
-| Collision episodes | `190` |
-| Timeout episodes | `0` |
-| Mean collection reward | `55.646` |
+$$
+r_t =
+5(d_t-d_{t+1})-0.02
+$$
 
-Each transition has the form
+This means:
+
+- moving toward the goal produces positive reward;
+- moving away produces negative reward;
+- every step has a small penalty.
+
+Additional terminal rewards are:
+
+```text
+Goal reached: +10
+Collision:    -5
+```
+
+The episode terminates when:
+
+- the agent reaches the goal;
+- the agent collides with an obstacle or map boundary;
+- the maximum number of steps is reached.
+
+---
+
+# Offline Dataset
+
+The offline dataset is generated by:
+
+```text
+collect_dataset.py
+```
+
+The behavior policy is intentionally imperfect.
+
+It approximately follows one of two waypoint routes around the obstacle and adds Gaussian noise to its actions.
+
+The main route is selected with probability:
+
+```text
+0.7
+```
+
+and the alternative route with probability:
+
+```text
+0.3
+```
+
+The action noise is sampled from:
+
+$$
+\epsilon \sim \mathcal{N}(0,0.3^2)
+$$
+
+Additionally, with probability `0.05`, the behavior policy executes a completely random action.
+
+This produces a dataset containing:
+
+- successful trajectories;
+- suboptimal movements;
+- noisy actions;
+- collisions.
+
+Each transition has the form:
 
 ```text
 (state, action, reward, next_state, done)
@@ -174,376 +237,704 @@ and is stored in:
 data/offline_dataset.npz
 ```
 
-Once this file is created, BCQ training does not collect additional training transitions.
+---
+
+## Dataset Statistics
+
+The generated dataset contains:
+
+| Statistic | Value |
+|---|---:|
+| Episodes | `1,000` |
+| Transitions | `38,751` |
+| Successful episodes | `810` |
+| Collision episodes | `190` |
+| Timeout episodes | `0` |
+| Success rate | `81.0%` |
+| Average reward | `55.646` |
+
+After this dataset is generated, it is frozen.
+
+BCQ does not add new transitions during training.
 
 ---
 
-## 5. BCQ Architecture
+# BCQ Algorithm
 
-The implementation is split between `models.py` and `bcq.py`.
+The BCQ implementation consists of three neural components:
 
-### 5.1 Conditional VAE
+1. **Conditional VAE**
+2. **Perturbation Actor**
+3. **Double Critic**
 
-The VAE models the conditional behavior distribution
+The main implementation is located in:
 
-$$
-p(a\mid s).
-$$
+```text
+models.py
+bcq.py
+```
 
-The encoder receives the concatenated state and dataset action and maps them to a latent distribution:
+---
 
-$$
-q_\phi(z\mid s,a).
-$$
+# Conditional VAE
 
-The decoder then reconstructs or samples a plausible action:
+The VAE learns which actions are likely to appear in the offline dataset for a given state.
 
-$$
-\hat a = D_\theta(s,z).
-$$
+Instead of allowing BCQ to freely generate arbitrary continuous actions, the VAE produces candidate actions that resemble the behavior represented in the dataset.
+
+The encoder receives:
+
+```text
+state + action
+```
+
+and produces a latent distribution.
 
 Architecture:
 
 ```text
-Encoder:
-(state + action) -> 256 -> ReLU -> 256 -> ReLU -> mean / log_std
-
-Decoder:
-(state + latent) -> 256 -> ReLU -> 256 -> ReLU -> tanh(action)
+(state + action)
+        |
+       256
+        |
+      ReLU
+        |
+       256
+        |
+      ReLU
+       / \
+    mean log_std
 ```
 
-The latent dimension is `4`.
+The decoder receives:
 
-The training objective is
+```text
+state + latent vector
+```
+
+and reconstructs an action:
+
+```text
+(state + latent)
+        |
+       256
+        |
+      ReLU
+        |
+       256
+        |
+      ReLU
+        |
+      tanh
+        |
+      action
+```
+
+The latent dimension is:
+
+```text
+4
+```
+
+The VAE objective combines action reconstruction and KL regularization:
 
 $$
-\mathcal{L}_{VAE}
+L_{VAE}
 =
-\operatorname{MSE}(\hat a,a)
+L_{reconstruction}
 +
-0.5\,D_{KL}(q_\phi(z\mid s,a)\;||\;\mathcal{N}(0,I)).
+0.5L_{KL}
 $$
 
-The purpose of the VAE is not to maximize return directly. It learns which actions are plausible under the fixed dataset.
+The VAE does not directly optimize reward.
 
-### 5.2 Perturbation Actor
+Its purpose is to model the action distribution contained in the offline dataset.
 
-A VAE candidate is allowed to move only a small distance:
+---
+
+# Perturbation Actor
+
+Using only VAE actions would make the policy behave too similarly to the original dataset.
+
+BCQ therefore uses a perturbation network.
+
+It receives:
+
+```text
+state + VAE action
+```
+
+and produces a small correction.
+
+The corrected action is:
 
 $$
-\tilde a
+\tilde{a}
 =
-\operatorname{clip}
-\left(
- a + \Phi\tanh(\xi_\psi(s,a)),
- -1,
- 1
-\right),
+a +
+\Phi\tanh(\xi(s,a))
 $$
 
-with
+where:
 
 $$
-\Phi = 0.05.
+\Phi=0.05
 $$
 
-The perturbation actor therefore improves candidate actions without allowing unrestricted movement away from the behavior distribution.
+The final action is clipped to:
+
+$$
+[-1,1]
+$$
+
+This allows BCQ to improve dataset actions while preventing large deviations from the behavior distribution.
 
 Architecture:
 
 ```text
-(state + action) -> 256 -> ReLU -> 256 -> ReLU -> action perturbation
+(state + action)
+        |
+       256
+        |
+      ReLU
+        |
+       256
+        |
+      ReLU
+        |
+  perturbation
 ```
 
-### 5.3 Double Critic
+---
 
-Two independent Q-functions are learned:
+# Double Critic
+
+BCQ uses two Q-networks:
 
 $$
-Q_1(s,a), \qquad Q_2(s,a).
+Q_1(s,a)
 $$
 
-Each critic has the architecture
+and
+
+$$
+Q_2(s,a)
+$$
+
+Each critic has the architecture:
 
 ```text
-(state + action) -> 256 -> ReLU -> 256 -> ReLU -> scalar Q-value
+(state + action)
+        |
+       256
+        |
+      ReLU
+        |
+       256
+        |
+      ReLU
+        |
+     Q-value
 ```
 
-The target evaluation combines the conservative minimum and optimistic maximum:
+Using two critics reduces the effect of Q-value overestimation.
+
+During target calculation, the implementation combines both critics:
 
 $$
 Q_{mix}
 =
-0.75\min(Q_1',Q_2')
+0.75\min(Q_1,Q_2)
 +
-0.25\max(Q_1',Q_2').
+0.25\max(Q_1,Q_2)
 $$
 
-For every next state, the implementation samples `10` candidate next actions during training and chooses the candidate with the highest mixed target value.
+For each next state, BCQ generates multiple candidate actions and selects the one with the highest target value.
 
-The Bellman target is
+The Bellman target is:
 
 $$
-y
-=
-r+
+y =
+r +
 \gamma(1-d)
-\max_i Q_{mix}(s',\tilde a_i),
+\max_i Q_{mix}(s',a_i)
 $$
 
-with
+where:
 
 $$
-\gamma=0.99.
+\gamma=0.99
 $$
 
-The critic objective is
+The critic loss is:
 
 $$
-\mathcal{L}_Q
+L_Q =
+(Q_1(s,a)-y)^2 +
+(Q_2(s,a)-y)^2
+$$
+
+---
+
+# Actor Optimization
+
+The perturbation actor is trained to maximize the predicted Q-value.
+
+The implemented loss is:
+
+$$
+L_{actor}
 =
-(Q_1(s,a)-y)^2
-+
-(Q_2(s,a)-y)^2.
+-\mathbb{E}[Q_1(s,\tilde a)]
 $$
 
-### 5.4 Actor objective
+Because of the negative sign, the actor loss normally becomes **more negative** as the predicted Q-value increases.
 
-The perturbation actor is optimized using
+Therefore:
 
-$$
-\mathcal{L}_{actor}
-=
--\mathbb{E}[Q_1(s,\tilde a)].
-$$
+```text
+Actor loss becoming more negative is expected.
+```
 
-Therefore, the actor loss commonly becomes **more negative** as the actor finds actions with larger predicted Q-values. It should not be interpreted like a conventional supervised loss that must approach zero.
+It should eventually stabilize rather than diverge indefinitely.
 
-### 5.5 Action selection
+---
 
-At inference time, the state is repeated `100` times. The VAE generates `100` candidate actions, the perturbation actor adjusts each one, and the critic selects
+# BCQ Action Selection
+
+During evaluation, BCQ generates:
+
+```text
+100 candidate actions
+```
+
+for every state.
+
+The process is:
+
+```text
+Current State
+     |
+     v
+Conditional VAE
+     |
+     v
+100 Candidate Actions
+     |
+     v
+Perturbation Actor
+     |
+     v
+Modified Candidate Actions
+     |
+     v
+Critic Q1
+     |
+     v
+Action with Maximum Q-value
+```
+
+Formally:
 
 $$
 a^*
 =
-\arg\max_i Q_1(s,\tilde a_i).
+\arg\max_i Q_1(s,\tilde a_i)
 $$
 
-This is the core batch-constrained decision rule used by the project.
+This is the key idea behind the batch constraint:
+
+BCQ searches for a good action among actions that remain close to those represented by the offline dataset.
 
 ---
 
-## 6. Training Configuration
+# Training Configuration
 
 | Hyperparameter | Value |
 |---|---:|
 | Batch size | `256` |
 | Maximum training steps | `100,000` |
-| Learning rate | `1e-3` |
-| Discount factor $\gamma$ | `0.99` |
-| Soft target update $\tau$ | `0.005` |
-| Perturbation limit $\Phi$ | `0.05` |
+| Learning rate | `0.001` |
+| Discount factor | `0.99` |
+| Target update coefficient | `0.005` |
+| Perturbation limit | `0.05` |
 | VAE latent dimension | `4` |
-| Target candidates per next state | `10` |
-| Inference candidates | `100` |
+| Candidate actions during training | `10` |
+| Candidate actions during evaluation | `100` |
 | Random seed | `42` |
 
-Target critic and target perturbation networks are updated by Polyak averaging:
+The target networks are updated using soft updates:
 
 $$
-\theta' \leftarrow \tau\theta + (1-\tau)\theta'.
+\theta_{target}
+\leftarrow
+\tau\theta
++
+(1-\tau)\theta_{target}
 $$
 
-### Early stopping
+with:
 
-The policy is evaluated every `5,000` gradient steps on `30` episodes.
+$$
+\tau=0.005
+$$
 
-Model selection uses:
+---
 
-1. **success rate** as the primary metric;
-2. **average reward** as the secondary metric when success is effectively tied.
+# Early Stopping
 
-Early stopping begins after step `10,000` with patience `2` evaluation rounds.
+The policy is evaluated every:
 
-In the reported run:
+```text
+5,000 training steps
+```
 
-| Step | Success | Average reward | Collision rate |
+using:
+
+```text
+30 evaluation episodes
+```
+
+Model quality is determined primarily by:
+
+1. success rate;
+2. average reward.
+
+Early stopping starts after:
+
+```text
+10,000 steps
+```
+
+with patience:
+
+```text
+2 evaluations
+```
+
+The training run produced:
+
+| Step | Success Rate | Average Reward | Collision Rate |
 |---:|---:|---:|---:|
 | 5,000 | 90% | 58.893 | 10% |
 | **10,000** | **100%** | **64.399** | **0%** |
 | 15,000 | 100% | 63.752 | 0% |
 | 20,000 | 100% | 63.606 | 0% |
 
-The best checkpoint was therefore selected at **10,000 steps**, while training terminated at **20,000 steps** after two evaluations without meaningful improvement.
+The best checkpoint was obtained at:
+
+```text
+10,000 steps
+```
+
+Training stopped at:
+
+```text
+20,000 steps
+```
+
+because two consecutive evaluations failed to improve the best result.
+
+The best model is stored in:
+
+```text
+checkpoints/bcq_best.pt
+```
+
+and exported as:
+
+```text
+checkpoints/bcq_final.pt
+```
 
 <p align="center">
-  <img src="results/training_success_rate.png" width="48%" alt="Success rate during BCQ training">
-  <img src="results/training_average_reward.png" width="48%" alt="Average reward during BCQ training">
+  <img src="results/training_success_rate.png" width="48%" alt="Training success rate">
+  <img src="results/training_average_reward.png" width="48%" alt="Training average reward">
 </p>
 
 ---
 
-## 7. Training Diagnostics
+# Training Dynamics
 
-The three optimization losses have different interpretations.
+## VAE Loss
 
-### VAE loss
+Expected behavior:
 
-Expected behavior: **decrease and then stabilize**.
+```text
+decrease -> stabilize
+```
 
-The VAE reconstruction objective converged to approximately `0.10`, indicating that the conditional generative model had reached a stable reconstruction regime.
+The VAE loss converged to approximately:
 
-<p align="center">
-  <img src="results/vae_loss.png" width="620" alt="VAE training loss">
-</p>
-
-### Critic loss
-
-Expected behavior: **fluctuation is normal**, because the Bellman target changes while the actor and target networks are also moving. The critical failure mode is persistent divergence or numerical explosion, not the absence of monotonic decrease.
-
-In this experiment the critic loss increased during the early value-learning phase and then moved back toward a lower, stable regime.
+```text
+0.10
+```
 
 <p align="center">
-  <img src="results/critic_loss.png" width="620" alt="Critic training loss">
-</p>
-
-### Actor loss
-
-Expected behavior: usually becomes **more negative** and then stabilizes because
-
-$$
-\mathcal{L}_{actor}=-Q_1(s,a).
-$$
-
-The actor loss reached a plateau around `-34`, which is consistent with stabilization of the learned Q-values and perturbation policy.
-
-<p align="center">
-  <img src="results/actor_loss.png" width="620" alt="Perturbation actor loss">
+  <img src="results/vae_loss.png" width="650" alt="VAE loss">
 </p>
 
 ---
 
-## 8. Final Evaluation
+## Critic Loss
 
-The final model is evaluated for `100` episodes and compared with two baselines:
+The critic loss does not need to decrease monotonically.
 
-- **Random** — uniformly sampled continuous actions;
-- **Behavior** — the noisy waypoint policy used to generate the offline dataset;
-- **BCQ** — the best offline-trained BCQ checkpoint.
+Its targets change during training because:
 
-### Results
+- target networks are updated;
+- the actor changes;
+- candidate actions change;
+- Q-values themselves evolve.
 
-| Policy | Success rate | Collision rate | Average reward | Reward std. | Average steps |
+The important requirement is that the critic remains numerically stable.
+
+During the experiment, the critic loss initially increased and later decreased into a more stable region.
+
+<p align="center">
+  <img src="results/critic_loss.png" width="650" alt="Critic loss">
+</p>
+
+---
+
+## Actor Loss
+
+Because:
+
+$$
+L_{actor}=-Q_1
+$$
+
+the actor loss is expected to become more negative while the policy improves.
+
+In this experiment it eventually stabilized around:
+
+```text
+-34
+```
+
+<p align="center">
+  <img src="results/actor_loss.png" width="650" alt="Actor loss">
+</p>
+
+---
+
+# Final Evaluation
+
+The final BCQ model was compared against:
+
+### Random Policy
+
+Actions are sampled uniformly from the continuous action space.
+
+### Behavior Policy
+
+The same noisy waypoint controller used to create the offline dataset.
+
+### BCQ Policy
+
+The best model obtained during offline training.
+
+Each policy was evaluated for:
+
+```text
+100 episodes
+```
+
+---
+
+## Results
+
+| Policy | Success Rate | Collision Rate | Average Reward | Reward Std | Average Steps |
 |---|---:|---:|---:|---:|---:|
 | Random | 0% | 93% | -4.531 | 5.835 | 37.11 |
 | Behavior | 76% | 24% | 53.165 | 20.132 | 37.19 |
 | **BCQ** | **100%** | **0%** | **64.398** | **0.006** | **39.00** |
 
-BCQ therefore achieves:
-
-- **+24 percentage points** in success rate over the behavior policy;
-- complete removal of collisions in this evaluation (`24% -> 0%`);
-- a higher mean return (`53.165 -> 64.398`);
-- dramatically lower return variance.
-
-<p align="center">
-  <img src="results/policy_success_comparison.png" width="32%" alt="Policy success comparison">
-  <img src="results/policy_reward_comparison.png" width="32%" alt="Policy reward comparison">
-  <img src="results/policy_collision_comparison.png" width="32%" alt="Policy collision comparison">
-</p>
-
----
-
-## 9. Policy Trajectories
-
-### Random policy
-
-The random controller has no navigation strategy and frequently collides with the map boundary or obstacle.
-
-<p align="center">
-  <img src="results/trajectory_random.png" width="620" alt="Random policy trajectory">
-</p>
-
-### Behavior policy
-
-The behavior controller provides useful demonstrations, but noise and random exploration create collisions and inefficient decisions.
-
-<p align="center">
-  <img src="results/trajectory_behavior.png" width="620" alt="Behavior policy trajectory">
-</p>
-
-### BCQ policy
-
-BCQ uses the support of the behavior dataset while choosing higher-value actions inside that constrained region. In the final experiment it consistently reaches the goal without collision.
-
-<p align="center">
-  <img src="results/trajectory_bcq.png" width="620" alt="BCQ policy trajectory">
-</p>
-
----
-
-## 10. Repository Structure
+BCQ improved the behavior policy from:
 
 ```text
-.
-├── bcq.py                  # BCQ training step, action selection, save/load
-├── collect_dataset.py      # Behavior policy and offline dataset generation
-├── config.py               # Environment, BCQ, and experiment configuration
-├── dataset.py              # Offline dataset loader and minibatch sampling
-├── env.py                  # Continuous 2D navigation environment
-├── evaluate.py             # Random / behavior / BCQ evaluation
-├── models.py               # VAE, double critic, perturbation actor
-├── train.py                # Offline training, checkpointing, early stopping
-├── visualize.py            # Training and evaluation plots
-│
-├── data/
-│   └── offline_dataset.npz # Generated by collect_dataset.py
-│
-├── checkpoints/
-│   ├── bcq_best.pt         # Best evaluation checkpoint
-│   └── bcq_final.pt        # Final exported best model
-│
-└── results/
-    ├── evaluation_metrics.json
-    ├── evaluation_trajectories.npz
-    ├── training_history.npz
-    ├── trajectory_random.png
-    ├── trajectory_behavior.png
-    ├── trajectory_bcq.png
-    ├── policy_success_comparison.png
-    ├── policy_reward_comparison.png
-    ├── policy_collision_comparison.png
-    ├── training_success_rate.png
-    ├── training_average_reward.png
-    ├── vae_loss.png
-    ├── critic_loss.png
-    └── actor_loss.png
+76% -> 100% success
 ```
 
-`data/` and `checkpoints/` are generated during the pipeline and do not need to be committed if the repository is intended to remain lightweight.
+and reduced collisions from:
+
+```text
+24% -> 0%
+```
+
+Average reward increased from:
+
+```text
+53.165 -> 64.398
+```
+
+<p align="center">
+  <img src="results/policy_success_comparison.png" width="32%" alt="Success comparison">
+  <img src="results/policy_reward_comparison.png" width="32%" alt="Reward comparison">
+  <img src="results/policy_collision_comparison.png" width="32%" alt="Collision comparison">
+</p>
 
 ---
 
-## 11. Installation
+# Policy Trajectories
 
-Python `3.10+` is recommended.
+## Random Policy
 
-Create a virtual environment and install the dependencies:
+The random policy has no navigation strategy and usually collides with the obstacle or environment boundary.
+
+<p align="center">
+  <img src="results/trajectory_random.png" width="650" alt="Random policy trajectory">
+</p>
+
+---
+
+## Behavior Policy
+
+The behavior policy generally moves toward the goal but contains substantial action noise.
+
+This creates both successful trajectories and collisions.
+
+<p align="center">
+  <img src="results/trajectory_behavior.png" width="650" alt="Behavior policy trajectory">
+</p>
+
+---
+
+## BCQ Policy
+
+BCQ learns to select higher-value actions while remaining close to the action distribution represented in the offline dataset.
+
+The final policy reaches the goal without collisions during the evaluation experiment.
+
+<p align="center">
+  <img src="results/trajectory_bcq.png" width="650" alt="BCQ policy trajectory">
+</p>
+
+---
+
+# Repository Structure
+
+```text
+RL_Project/
+│
+├── bcq.py
+├── collect_dataset.py
+├── config.py
+├── dataset.py
+├── env.py
+├── evaluate.py
+├── models.py
+├── train.py
+├── visualize.py
+├── README.md
+│
+├── data/
+│   └── offline_dataset.npz
+│
+├── checkpoints/
+│   ├── bcq_10000.pt
+│   ├── bcq_best.pt
+│   └── bcq_final.pt
+│
+└── results/
+    ├── actor_loss.png
+    ├── critic_loss.png
+    ├── evaluation_metrics.json
+    ├── evaluation_trajectories.npz
+    ├── policy_collision_comparison.png
+    ├── policy_reward_comparison.png
+    ├── policy_success_comparison.png
+    ├── training_average_reward.png
+    ├── training_history.npz
+    ├── training_success_rate.png
+    ├── trajectory_bcq.png
+    ├── trajectory_behavior.png
+    ├── trajectory_random.png
+    └── vae_loss.png
+```
+
+---
+
+# Files
+
+### `env.py`
+
+Implements the custom continuous 2D navigation environment.
+
+### `collect_dataset.py`
+
+Runs the noisy behavior policy and generates the fixed offline dataset.
+
+### `dataset.py`
+
+Loads the offline dataset and samples random minibatches.
+
+### `models.py`
+
+Contains:
+
+- Conditional VAE
+- Double Critic
+- Perturbation Actor
+
+### `bcq.py`
+
+Implements the BCQ algorithm:
+
+- VAE training;
+- critic training;
+- perturbation actor training;
+- target-network updates;
+- candidate action generation;
+- action selection;
+- model saving and loading.
+
+### `train.py`
+
+Runs offline BCQ training with:
+
+- training statistics;
+- policy evaluation;
+- checkpointing;
+- best-model selection;
+- early stopping;
+- numerical stability checks.
+
+### `evaluate.py`
+
+Compares:
+
+- Random Policy;
+- Behavior Policy;
+- BCQ Policy.
+
+It saves final metrics and trajectories.
+
+### `visualize.py`
+
+Generates all training and evaluation plots.
+
+### `config.py`
+
+Contains environment parameters, paths, BCQ hyperparameters, and experiment settings.
+
+---
+
+# Installation
+
+Python 3.10+ is recommended.
+
+Create a virtual environment:
 
 ```bash
 python -m venv .venv
 ```
 
-Windows:
+Activate it on Windows:
 
 ```bash
 .venv\Scripts\activate
-```
-
-Linux / macOS:
-
-```bash
-source .venv/bin/activate
 ```
 
 Install dependencies:
@@ -552,152 +943,96 @@ Install dependencies:
 pip install numpy torch matplotlib
 ```
 
-CUDA is optional. The code automatically uses CUDA when `torch.cuda.is_available()` is true; otherwise it runs on CPU.
+The project automatically uses CUDA when available. Otherwise, it runs on CPU.
 
 ---
 
-## 12. Reproducing the Experiment
+# Running the Project
 
-### 1. Generate the offline dataset
+## 1. Generate the Offline Dataset
 
 ```bash
 python collect_dataset.py
 ```
 
-This creates:
+Output:
 
 ```text
 data/offline_dataset.npz
 ```
 
-### 2. Train BCQ
+---
+
+## 2. Train BCQ
 
 ```bash
 python train.py
 ```
 
-Training creates checkpoints and stores the full history in `results/training_history.npz`.
-
-The best policy is restored before exporting:
+Outputs include:
 
 ```text
 checkpoints/bcq_best.pt
 checkpoints/bcq_final.pt
+results/training_history.npz
 ```
 
-### 3. Evaluate all policies
+---
+
+## 3. Evaluate the Policies
 
 ```bash
 python evaluate.py
 ```
 
-This evaluates Random, Behavior, and BCQ policies and creates:
+Outputs:
 
 ```text
 results/evaluation_metrics.json
 results/evaluation_trajectories.npz
 ```
 
-### 4. Generate all plots
+---
+
+## 4. Generate Visualizations
 
 ```bash
 python visualize.py
 ```
 
-All figures are written to `results/`.
-
-### Optional smoke tests
-
-Individual modules can also be executed directly:
-
-```bash
-python config.py
-python env.py
-python dataset.py
-python models.py
-python bcq.py
-```
-
----
-
-## 13. Offline-RL Interpretation
-
-The important result is not simply that the final policy reaches the goal. The experiment demonstrates the specific motivation for BCQ.
-
-The behavior policy generates imperfect but informative data. BCQ does not receive new training transitions after collection. Instead, it:
-
-1. learns the conditional action distribution represented by the dataset;
-2. samples actions from this learned support;
-3. permits only small bounded perturbations;
-4. uses Q-learning to select better actions among those constrained candidates.
-
-This allows the final policy to outperform the policy that generated the data **without unrestricted exploration during training**.
-
----
-
-## 14. Limitations
-
-This repository is intentionally compact and designed to make the BCQ mechanism easy to inspect. The current experiment should therefore be interpreted as a controlled demonstration rather than a large-scale benchmark.
-
-Current limitations include:
-
-- one fixed map;
-- one fixed start and goal location;
-- a single rectangular obstacle;
-- a low-dimensional state and action space;
-- dataset coverage generated by only two waypoint families;
-- no comparison yet against other offline RL algorithms such as CQL, IQL, or TD3+BC;
-- environment rollouts are used for checkpoint selection, although evaluation transitions are never used for gradient updates.
-
-For a stricter offline-learning protocol, checkpoint selection could be replaced by an offline policy evaluation method or a predefined fixed training budget.
-
----
-
-## 15. Possible Extensions
-
-Natural next experiments include:
-
-- varying behavior-policy noise to create low-, medium-, and high-quality datasets;
-- studying sensitivity to the perturbation limit $\Phi$;
-- varying the number of candidate actions;
-- randomizing start and goal positions;
-- adding multiple obstacle layouts;
-- comparing BCQ with Behavior Cloning;
-- comparing BCQ with CQL, IQL, TD3+BC, or other offline RL baselines;
-- evaluating robustness when the test environment differs from the data-collection environment.
-
-These extensions would test not only whether BCQ solves the current map, but also how performance depends on **dataset quality, coverage, and distribution shift**.
-
----
-
-## 16. Reference
-
-The implementation follows the core idea of Batch-Constrained Q-Learning introduced in:
-
-> Scott Fujimoto, David Meger, Doina Precup. **Off-Policy Deep Reinforcement Learning without Exploration.** ICML 2019.
-
-Paper: https://arxiv.org/abs/1812.02900
-
----
-
-## Summary
-
-This project provides a compact reproducible BCQ experiment with a fully custom continuous-control environment and a real offline training pipeline.
-
-The reference run produced the following progression:
+The generated plots are stored in:
 
 ```text
-No policy knowledge
-        ↓
-Noisy behavior dataset: 38,751 transitions
-        ↓
-Offline BCQ training
-        ↓
-Best checkpoint at 10,000 gradient steps
-        ↓
-100% evaluation success
-0% collisions
-64.398 average reward
+results/
 ```
 
-The experiment illustrates the central BCQ principle: **improve on the behavior policy while keeping the learned actions close to the support of the fixed offline dataset.**
+---
+
+# Result
+
+The experiment demonstrates that BCQ can improve an imperfect behavior policy using only a fixed offline dataset.
+
+The complete pipeline is:
+
+```text
+Custom Environment
+        |
+        v
+Noisy Behavior Policy
+        |
+        v
+38,751 Offline Transitions
+        |
+        v
+BCQ Offline Training
+        |
+        v
+Best Model at 10,000 Steps
+        |
+        v
+100% Success Rate
+0% Collision Rate
+64.398 Average Reward
+```
+
+The key result is that the final BCQ policy performs better than the policy that generated its training data while remaining constrained by the action distribution contained in that data. 
