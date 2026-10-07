@@ -1,0 +1,26 @@
+{
+    "random": {
+        "success_rate": 0.0,
+        "collision_rate": 0.93,
+        "average_reward": -4.531357319068903,
+        "std_reward": 5.83512003777733,
+        "average_steps": 37.11,
+        "std_steps": 35.75552964228051
+    },
+    "behavior": {
+        "success_rate": 0.76,
+        "collision_rate": 0.24,
+        "average_reward": 53.164664939892276,
+        "std_reward": 20.132320448957852,
+        "average_steps": 37.19,
+        "std_steps": 10.18694753103205
+    },
+    "bcq": {
+        "success_rate": 1.0,
+        "collision_rate": 0.0,
+        "average_reward": 64.39844230532645,
+        "std_reward": 0.0056567599835741144,
+        "average_steps": 39.0,
+        "std_steps": 0.0
+    }
+}
