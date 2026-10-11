@@ -19,11 +19,24 @@ from config import (
 
 
 class NavigationEnv:
-    def __init__(self, seed=SEED):
+    """Core navigation environment with a lightweight, dependency-free API.
+
+    ``GymnasiumNavigationEnv`` in ``gym_env.py`` adapts this class to the
+    standard Gymnasium API.  Keeping this core class free of Gymnasium makes
+    dataset creation and the existing training code easy to run as scripts.
+    """
+
+    def __init__(self, seed=SEED, start_position=None, goal_position=None):
         self.rng = np.random.default_rng(seed)
 
-        self.start_position = np.array(START_POSITION, dtype=np.float32)
-        self.goal_position = np.array(GOAL_POSITION, dtype=np.float32)
+        self.start_position = self._as_valid_position(
+            START_POSITION if start_position is None else start_position,
+            "start_position",
+        )
+        self.goal_position = self._as_valid_position(
+            GOAL_POSITION if goal_position is None else goal_position,
+            "goal_position",
+        )
 
         self.position = self.start_position.copy()
         self.steps = 0
@@ -41,7 +54,34 @@ class NavigationEnv:
     def max_action(self):
         return 1.0
 
-    def reset(self):
+    def _as_valid_position(self, position, name):
+        position = np.asarray(position, dtype=np.float32)
+
+        if position.shape != (2,):
+            raise ValueError(f"{name} must have shape (2,), got {position.shape}")
+
+        if self._is_outside_map(position) or self._collides_with_obstacle(position):
+            raise ValueError(f"{name} must be inside the free space, got {position}")
+
+        return position.copy()
+
+    def set_task(self, start_position, goal_position):
+        """Set a valid start/goal pair for the next reset.
+
+        This is useful for robustness experiments.  It deliberately does not
+        randomize the default task, so existing dataset and checkpoint results
+        remain exactly reproducible.
+        """
+        self.start_position = self._as_valid_position(start_position, "start_position")
+        self.goal_position = self._as_valid_position(goal_position, "goal_position")
+
+    def reset(self, start_position=None, goal_position=None):
+        if (start_position is None) != (goal_position is None):
+            raise ValueError("Provide both start_position and goal_position, or neither.")
+
+        if start_position is not None:
+            self.set_task(start_position, goal_position)
+
         self.position = self.start_position.copy()
         self.steps = 0
         self.done = False

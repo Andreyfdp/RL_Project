@@ -824,9 +824,14 @@ RL_Project/
 ├── dataset.py
 ├── env.py
 ├── evaluate.py
+├── evaluate_generalization.py
+├── gym_env.py
 ├── models.py
 ├── train.py
 ├── visualize.py
+├── demo.py
+├── BCQ_Offline_Navigation_Demo.ipynb
+├── requirements.txt
 ├── README.md
 │
 ├── data/
@@ -911,6 +916,31 @@ Compares:
 
 It saves final metrics and trajectories.
 
+### `demo.py`
+
+Loads the saved BCQ checkpoint and creates a short GIF animation of one policy
+rollout. This is the recommended live-demo artifact.
+
+### `BCQ_Offline_Navigation_Demo.ipynb`
+
+Presentation notebook. It visualizes the environment, explains one numerical
+BCQ Bellman update, runs one real neural-network update on the offline data,
+and evaluates the saved checkpoint. It can also be opened in Google Colab after
+uploading the repository files.
+
+### `gym_env.py`
+
+Provides `GymnasiumNavigationEnv`, a standards-compatible adapter around the
+custom environment. The original implementation remains dependency-free; the
+adapter uses Gymnasium's `reset -> (observation, info)` and five-value `step`
+API.
+
+### `evaluate_generalization.py`
+
+Runs a separate robustness diagnostic with small random perturbations of the
+start and goal. It is not part of the fixed-task headline result because the
+provided checkpoint was trained only on the default start and goal.
+
 ### `visualize.py`
 
 Generates all training and evaluation plots.
@@ -928,7 +958,7 @@ Python 3.10+ is recommended.
 Create a virtual environment:
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 ```
 
 Activate it on Windows:
@@ -940,7 +970,7 @@ Activate it on Windows:
 Install dependencies:
 
 ```bash
-pip install numpy torch matplotlib
+python3 -m pip install -r requirements.txt
 ```
 
 The project automatically uses CUDA when available. Otherwise, it runs on CPU.
@@ -952,7 +982,7 @@ The project automatically uses CUDA when available. Otherwise, it runs on CPU.
 ## 1. Generate the Offline Dataset
 
 ```bash
-python collect_dataset.py
+python3 collect_dataset.py
 ```
 
 Output:
@@ -966,7 +996,7 @@ data/offline_dataset.npz
 ## 2. Train BCQ
 
 ```bash
-python train.py
+python3 train.py
 ```
 
 Outputs include:
@@ -982,7 +1012,7 @@ results/training_history.npz
 ## 3. Evaluate the Policies
 
 ```bash
-python evaluate.py
+python3 evaluate.py
 ```
 
 Outputs:
@@ -997,13 +1027,63 @@ results/evaluation_trajectories.npz
 ## 4. Generate Visualizations
 
 ```bash
-python visualize.py
+python3 visualize.py
 ```
 
 The generated plots are stored in:
 
 ```text
 results/
+```
+
+---
+
+## 5. Run the Presentation Notebook
+
+Open `BCQ_Offline_Navigation_Demo.ipynb` in Jupyter or upload the repository
+files to Google Colab and open the notebook there. It contains the required
+worked BCQ update and does not overwrite the saved model.
+
+---
+
+## 6. Create a Live Demo Animation
+
+```bash
+python3 demo.py
+```
+
+This writes `results/bcq_demo.gif`. During an in-person presentation, use:
+
+```bash
+python3 demo.py --show
+```
+
+---
+
+## 7. Optional Robustness Diagnostic
+
+The default benchmark intentionally uses one fixed start and goal. To test
+small seeded perturbations around those regions without changing the original
+dataset or checkpoint:
+
+```bash
+python3 evaluate_generalization.py --episodes 100
+```
+
+Treat this result as an out-of-distribution diagnostic, not as a replacement
+for the reported fixed-task metric. A rigorous randomized-task claim requires
+collecting a randomized dataset and training a new model on it.
+
+---
+
+## Gymnasium Usage
+
+```python
+from gym_env import GymnasiumNavigationEnv
+
+env = GymnasiumNavigationEnv()
+observation, info = env.reset()
+observation, reward, terminated, truncated, info = env.step(env.action_space.sample())
 ```
 
 ---
@@ -1035,4 +1115,4 @@ Best Model at 10,000 Steps
 64.398 Average Reward
 ```
 
-The key result is that the final BCQ policy performs better than the policy that generated its training data while remaining constrained by the action distribution contained in that data. 
+The key result is that the final BCQ policy performs better than the policy that generated its training data while remaining constrained by the action distribution contained in that data.
