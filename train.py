@@ -1,306 +1,330 @@
+"""Reproducible offline experiments: BC, TD3, BCQ and held-out tasks."""
+
+import argparse
+import hashlib
+import json
 import random
+import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 import torch
 
+from baselines import BC, TD3
 from bcq import BCQ
 from config import (
-    DATASET_PATH,
-    MODEL_PATH,
-    RESULTS_DIR,
-    CHECKPOINT_DIR,
     BATCH_SIZE,
-    TRAINING_STEPS,
+    CHECKPOINT_DIR,
+    DATASET_PATH,
+    GAMMA,
+    LEARNING_RATE,
+    MAX_EPISODE_STEPS,
+    NUM_ACTION_SAMPLES,
+    PHI,
+    RESULTS_DIR,
     SEED,
-    create_project_dirs,
+    START_NOISE,
+    TAU,
+    TRAINING_STEPS,
 )
 from dataset import OfflineDataset
 from env import NavigationEnv
 
-
-# Evaluation
-EVAL_INTERVAL = 5000
+EVAL_INTERVAL = 5_000
 EVAL_EPISODES = 30
-
-# Early stopping
-EARLY_STOP_START = 10000
-EARLY_STOP_PATIENCE = 2
-
-# Minimum meaningful improvement
-MIN_SUCCESS_IMPROVEMENT = 0.01
-MIN_REWARD_IMPROVEMENT = 0.10
-
-# Safety
-MAX_CRITIC_LOSS = 1000.0
+EVAL_SEED = 10_000
+PROBE_SEED = 20_000
 
 
 def set_seed(seed):
+    """Seed Python, NumPy and PyTorch before constructing any networks."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
 
 
-def evaluate(agent, episodes=EVAL_EPISODES):
-    # Preserve training RNG state so evaluation does not affect training
-    cpu_rng_state = torch.get_rng_state()
+@contextmanager
+def isolated_rng(seed):
+    """Repeat diagnostics without consuming the training RNG stream."""
+    python_state, numpy_state = random.getstate(), np.random.get_state()
+    try:
+        with torch.random.fork_rng(devices=list(range(torch.cuda.device_count()))):
+            set_seed(seed)
+            yield
+    finally:
+        random.setstate(python_state)
+        np.random.set_state(numpy_state)
 
-    cuda_rng_state = None
-    if torch.cuda.is_available():
-        cuda_rng_state = torch.cuda.get_rng_state_all()
 
-    # Use the same random sequence for every evaluation
-    torch.manual_seed(SEED + 1000)
+def make_agent(algo, device="cpu", phi=PHI):
+    """Construct algorithms with shared dimensions and hyperparameters."""
+    cls = {"bc": BC, "td3": TD3, "bcq": BCQ}[algo]
+    kwargs = {"phi": phi} if algo == "bcq" else {}
+    return cls(4, 2, max_action=1.0, device=device, **kwargs)
 
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(SEED + 1000)
 
-    env = NavigationEnv(seed=SEED + 1000)
+@torch.no_grad()
+def policy_q(agent, states):
+    """Mean Q1(s, pi(s)); BC has no critic and returns None."""
+    if not hasattr(agent, "critic"):
+        return None
+    # Chunk the 100 BCQ candidates per state to bound diagnostic memory.
+    values = [
+        agent.critic.q1(chunk, agent.policy_actions(chunk)).flatten()
+        for chunk in states.split(64)
+    ]
+    value = torch.cat(values).mean().item()
+    if not np.isfinite(value):
+        raise FloatingPointError("Non-finite policy Q estimate")
+    return value
 
-    episode_rewards = []
-    episode_steps = []
 
-    successes = 0
-    collisions = 0
+def evaluate(agent, episodes=EVAL_EPISODES, seed=EVAL_SEED, generalization=False):
+    """Measure metrics and paired start-state Q/discounted return.
 
-    for _ in range(episodes):
-        state = env.reset()
-        total_reward = 0.0
-
-        while True:
-            action = agent.select_action(state)
-            state, reward, done, info = env.step(action)
-
-            total_reward += reward
-
-            if done:
-                episode_rewards.append(total_reward)
-                episode_steps.append(info["steps"])
-
-                if info["success"]:
-                    successes += 1
-
-                if info["collision"]:
-                    collisions += 1
-
-                break
-
-    # Restore training RNG state
-    torch.set_rng_state(cpu_rng_state)
-
-    if cuda_rng_state is not None:
-        torch.cuda.set_rng_state_all(cuda_rng_state)
-
+    Return is sum(gamma**t * reward_t), truncated at the environment horizon.
+    No critic bootstrap is added to this measured return.
+    """
+    if episodes <= 0:
+        raise ValueError("episodes must be positive")
+    rewards, returns, lengths, initial_q = [], [], [], []
+    successes = collisions = 0
+    trajectory = None
+    with isolated_rng(seed):
+        rng = np.random.default_rng(seed)
+        for episode in range(episodes):
+            if generalization:
+                start = rng.uniform((0.7, 0.7), (1.7, 1.7))
+                goal = rng.uniform((8.3, 8.3), (9.3, 9.3))
+                env = NavigationEnv(
+                    seed=seed + episode, start_position=start, goal_position=goal
+                )
+            else:
+                env = NavigationEnv(seed=seed + episode, start_noise=START_NOISE)
+            state = env.reset()
+            points = [env.position.tolist()]
+            total = discounted = 0.0
+            for t in range(MAX_EPISODE_STEPS):
+                action = agent.select_action(state)
+                # Q(s0,a0) and the rollout share the actual first action.
+                if t == 0 and hasattr(agent, "critic"):
+                    with torch.no_grad():
+                        s = torch.as_tensor(state, device=agent.device).unsqueeze(0)
+                        a = torch.as_tensor(action, device=agent.device).unsqueeze(0)
+                        initial_q.append(agent.critic.q1(s, a).item())
+                state, reward, done, info = env.step(action)
+                total += reward
+                discounted += agent.gamma**t * reward
+                points.append(env.position.tolist())
+                if done:
+                    break
+            rewards.append(total)
+            returns.append(discounted)
+            lengths.append(info["steps"])
+            successes += int(info["success"])
+            collisions += int(info["collision"])
+            if episode == 0:
+                trajectory = {
+                    "positions": points,
+                    "goal": env.goal_position.tolist(),
+                    "success": bool(info["success"]),
+                    "collision": bool(info["collision"]),
+                }
     return {
+        "episodes": episodes,
         "success_rate": successes / episodes,
         "collision_rate": collisions / episodes,
-        "average_reward": float(np.mean(episode_rewards)),
-        "average_steps": float(np.mean(episode_steps)),
+        "average_reward": float(np.mean(rewards)),
+        "average_steps": float(np.mean(lengths)),
+        "discounted_return": float(np.mean(returns)),
+        "discounted_return_std": float(np.std(returns)),
+        "q_start": float(np.mean(initial_q)) if initial_q else None,
+        "trajectory": trajectory,
     }
 
 
-def is_better_model(metrics, best_success, best_reward):
-    success = metrics["success_rate"]
-    reward = metrics["average_reward"]
-
-    # Success rate is the primary metric
-    if success >= best_success + MIN_SUCCESS_IMPROVEMENT:
-        return True
-
-    # If success rate is effectively equal, use reward
-    if abs(success - best_success) < MIN_SUCCESS_IMPROVEMENT:
-        if reward >= best_reward + MIN_REWARD_IMPROVEMENT:
-            return True
-
-    return False
-
-
-def train():
-    create_project_dirs()
-    set_seed(SEED)
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    dataset = OfflineDataset(DATASET_PATH, device=device)
-
-    agent = BCQ(
-        state_dim=4,
-        action_dim=2,
-        max_action=1.0,
-        device=device,
+def write_json(path, payload):
+    """Atomically replace a log so interrupted writes cannot corrupt it."""
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8"
     )
+    temporary.replace(path)
 
-    vae_losses = []
-    critic_losses = []
-    actor_losses = []
 
-    eval_steps = []
-    eval_success = []
-    eval_rewards = []
-    eval_average_steps = []
-    eval_collisions = []
+def reserve_run(directory, name):
+    """Reserve a fresh filename, including repeated runs of the same seed."""
+    directory.mkdir(parents=True, exist_ok=True)
+    index = 0
+    while True:
+        suffix = f"_repeat{index}" if index else ""
+        path = directory / f"{name}{suffix}.json"
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                handle.write("{}")
+            return path
+        except FileExistsError:
+            index += 1
 
-    best_success = -1.0
-    best_reward = -float("inf")
 
-    no_improvement_count = 0
-    stopped_early = False
-
-    best_model_path = CHECKPOINT_DIR / "bcq_best.pt"
-
-    print("Training started")
-    print(f"Device: {device}")
-    print(f"Dataset size: {len(dataset)}")
-    print(f"Maximum training steps: {TRAINING_STEPS}")
-    print()
-
-    print("Expected training behavior:")
-    print("VAE loss       -> decrease and stabilize")
-    print("Critic loss    -> fluctuate, then stabilize; must not explode")
-    print("Actor loss     -> usually become more negative, then stabilize")
-    print("Success rate   -> increase")
-    print("Average reward -> increase")
-    print("Average steps  -> decrease")
-    print("Collision rate -> decrease")
-    print()
-
-    for step in range(1, TRAINING_STEPS + 1):
-        batch = dataset.sample(BATCH_SIZE)
-        losses = agent.train(batch)
-
-        vae_loss = losses["vae_loss"]
-        critic_loss = losses["critic_loss"]
-        actor_loss = losses["actor_loss"]
-
-        # Numerical stability checks
-        if not np.isfinite(vae_loss):
-            raise RuntimeError(
-                f"VAE loss became invalid at step {step}: {vae_loss}"
-            )
-
-        if not np.isfinite(critic_loss):
-            raise RuntimeError(
-                f"Critic loss became invalid at step {step}: {critic_loss}"
-            )
-
-        if not np.isfinite(actor_loss):
-            raise RuntimeError(
-                f"Actor loss became invalid at step {step}: {actor_loss}"
-            )
-
-        if critic_loss > MAX_CRITIC_LOSS:
-            raise RuntimeError(
-                f"Critic loss exploded at step {step}: {critic_loss:.4f}"
-            )
-
-        vae_losses.append(vae_loss)
-        critic_losses.append(critic_loss)
-        actor_losses.append(actor_loss)
-
-        # Training log
-        if step % 1000 == 0:
-            recent_vae = float(np.mean(vae_losses[-1000:]))
-            recent_critic = float(np.mean(critic_losses[-1000:]))
-            recent_actor = float(np.mean(actor_losses[-1000:]))
-
-            print(
-                f"Step {step:6d}/{TRAINING_STEPS} | "
-                f"VAE {recent_vae:8.4f} | "
-                f"Critic {recent_critic:8.4f} | "
-                f"Actor {recent_actor:9.4f}"
-            )
-
-        # Policy evaluation
-        if step % EVAL_INTERVAL == 0:
-            metrics = evaluate(agent)
-
-            success = metrics["success_rate"]
-            reward = metrics["average_reward"]
-            avg_steps = metrics["average_steps"]
-            collision = metrics["collision_rate"]
-
-            eval_steps.append(step)
-            eval_success.append(success)
-            eval_rewards.append(reward)
-            eval_average_steps.append(avg_steps)
-            eval_collisions.append(collision)
-
-            print()
-            print("------------------------------------------------------------")
-            print(f"EVALUATION @ STEP {step}")
-            print(f"Success rate:   {success * 100:6.2f}%")
-            print(f"Average reward: {reward:8.3f}")
-            print(f"Average steps:  {avg_steps:8.2f}")
-            print(f"Collision rate: {collision * 100:6.2f}%")
-            print("------------------------------------------------------------")
-
-            if is_better_model(metrics, best_success, best_reward):
-                best_success = success
-                best_reward = reward
-                no_improvement_count = 0
-
-                agent.save(best_model_path)
-
-                print("NEW BEST MODEL")
-                print(f"Best success rate: {best_success * 100:.2f}%")
-                print(f"Best average reward: {best_reward:.3f}")
-
-            elif step >= EARLY_STOP_START:
-                no_improvement_count += 1
-
-                print(
-                    f"No meaningful improvement: "
-                    f"{no_improvement_count}/{EARLY_STOP_PATIENCE}"
+def train(args=None):
+    """Train for the full budget and save independent experiment artifacts."""
+    args = build_parser().parse_args() if args is None else args
+    for name in (
+        "steps",
+        "batch_size",
+        "eval_interval",
+        "eval_episodes",
+        "probe_size",
+        "threads",
+    ):
+        if getattr(args, name) <= 0:
+            raise ValueError(f"{name} must be positive")
+    if args.seed < 0 or not np.isfinite(args.phi) or args.phi < 0:
+        raise ValueError("seed and phi must be nonnegative and phi must be finite")
+    torch.set_num_threads(args.threads)
+    set_seed(args.seed)
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    dataset_path = Path(args.dataset).resolve()
+    dataset = OfflineDataset(dataset_path, device=device)
+    if not len(dataset):
+        raise ValueError("Dataset is empty")
+    agent = make_agent(args.algo, device, args.phi)
+    # Identical probe indices across seeds and algorithms for a given dataset.
+    indices = np.random.default_rng(PROBE_SEED).choice(
+        len(dataset), min(args.probe_size, len(dataset)), replace=False
+    )
+    probe = dataset.states[torch.as_tensor(indices, device=device)]
+    phi_suffix = f"_phi{args.phi:g}" if args.algo == "bcq" and args.phi != PHI else ""
+    name = f"{args.algo}_{dataset_path.stem}_seed{args.seed}{phi_suffix}"
+    run_path = reserve_run(Path(args.results_dir), name)
+    checkpoint_dir = Path(args.checkpoint_dir)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint = checkpoint_dir / f"{run_path.stem}_final.pt"
+    run = {
+        "schema_version": 1,
+        "status": "running",
+        "algo": args.algo,
+        "dataset": dataset_path.stem,
+        "dataset_path": str(dataset_path),
+        "dataset_sha256": hashlib.sha256(dataset_path.read_bytes()).hexdigest(),
+        "dataset_size": len(dataset),
+        "seed": args.seed,
+        "phi": args.phi if args.algo == "bcq" else None,
+        "steps": args.steps,
+        "device": str(device),
+        "torch_version": torch.__version__,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "hyperparameters": {
+            "batch_size": args.batch_size,
+            "gamma": GAMMA,
+            "tau": TAU,
+            "learning_rate": LEARNING_RATE,
+            "hidden_sizes": [256, 256],
+        },
+        "algorithm_hyperparameters": (
+            {
+                "phi": args.phi,
+                "train_candidates": 10,
+                "eval_candidates": NUM_ACTION_SAMPLES,
+            }
+            if args.algo == "bcq"
+            else {"policy_noise": 0.2, "noise_clip": 0.5, "policy_delay": 2}
+            if args.algo == "td3"
+            else {"objective": "action_mse"}
+        ),
+        "evaluation": {
+            "interval": args.eval_interval,
+            "episodes": args.eval_episodes,
+            "seed": EVAL_SEED,
+            "start_noise": START_NOISE,
+            "generalization_seed": EVAL_SEED + 1,
+            "return_horizon": MAX_EPISODE_STEPS,
+            "q_definition": "Q1(s, policy(s))",
+        },
+        "probe_indices": indices.tolist(),
+        "probe_seed": PROBE_SEED,
+        "checkpoint": str(checkpoint.resolve()),
+        "history": [],
+        "loss_history": [],
+    }
+    write_json(run_path, run)
+    started = time.perf_counter()
+    recent = {}
+    try:
+        for step in range(1, args.steps + 1):
+            losses = agent.train(dataset.sample(args.batch_size))
+            for key, value in losses.items():
+                if not np.isfinite(value):
+                    raise FloatingPointError(f"{key} is non-finite at step {step}")
+                recent.setdefault(key, []).append(value)
+            if step % 1000 == 0 or step == args.steps:
+                run["loss_history"].append(
+                    {
+                        "step": step,
+                        **{
+                            key: float(np.mean(values))
+                            for key, values in recent.items()
+                        },
+                    }
                 )
+                recent.clear()
+            if step % args.eval_interval == 0 or step == args.steps:
+                metrics = evaluate(agent, args.eval_episodes)
+                metrics.pop("trajectory")
+                with isolated_rng(PROBE_SEED):
+                    metrics["q_dataset"] = policy_q(agent, probe)
+                metrics["step"] = step
+                run["history"].append(metrics)
+                write_json(run_path, run)
+                print(
+                    f"{run_path.stem} | {step}/{args.steps} | "
+                    f"success={metrics['success_rate']:.3f} "
+                    f"collision={metrics['collision_rate']:.3f} "
+                    f"reward={metrics['average_reward']:.3f} "
+                    f"steps={metrics['average_steps']:.1f} "
+                    f"Q={metrics['q_dataset']} G0={metrics['discounted_return']:.3f}",
+                    flush=True,
+                )
+        agent.save(checkpoint)
+        run["final"] = evaluate(agent, args.eval_episodes)
+        run["generalization"] = evaluate(
+            agent, args.eval_episodes, seed=EVAL_SEED + 1, generalization=True
+        )
+        run["status"] = "completed"
+    except Exception as error:
+        run["status"] = "failed"
+        run["error"] = f"{type(error).__name__}: {error}"
+        raise
+    finally:
+        run["elapsed_seconds"] = time.perf_counter() - started
+        write_json(run_path, run)
+    return run_path
 
-            print()
 
-            # Stop when evaluation stops improving
-            if (
-                step >= EARLY_STOP_START
-                and no_improvement_count >= EARLY_STOP_PATIENCE
-            ):
-                print("EARLY STOPPING")
-                print(f"Stopped at step: {step}")
-                stopped_early = True
-                break
-
-        # Periodic backup
-        if step % 10000 == 0:
-            checkpoint_path = CHECKPOINT_DIR / f"bcq_{step}.pt"
-            agent.save(checkpoint_path)
-
-    # Restore the best policy found during training
-    if best_model_path.exists():
-        agent.load(best_model_path)
-
-    agent.save(MODEL_PATH)
-
-    # Save complete training history
-    np.savez(
-        RESULTS_DIR / "training_history.npz",
-        vae_loss=np.asarray(vae_losses, dtype=np.float32),
-        critic_loss=np.asarray(critic_losses, dtype=np.float32),
-        actor_loss=np.asarray(actor_losses, dtype=np.float32),
-        eval_steps=np.asarray(eval_steps, dtype=np.int32),
-        eval_success=np.asarray(eval_success, dtype=np.float32),
-        eval_rewards=np.asarray(eval_rewards, dtype=np.float32),
-        eval_average_steps=np.asarray(eval_average_steps, dtype=np.float32),
-        eval_collisions=np.asarray(eval_collisions, dtype=np.float32),
-    )
-
-    print()
-    print("============================================================")
-    print("TRAINING FINISHED")
-    print("============================================================")
-    print(f"Early stopping: {stopped_early}")
-    print(f"Best success rate: {best_success * 100:.2f}%")
-    print(f"Best average reward: {best_reward:.3f}")
-    print(f"Best checkpoint: {best_model_path}")
-    print(f"Final model: {MODEL_PATH}")
-    print(f"Training history: {RESULTS_DIR / 'training_history.npz'}")
+def build_parser():
+    """Expose one CLI for individual runs and experiment suites."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--algo", choices=("bcq", "bc", "td3"), default="bcq")
+    parser.add_argument("--dataset", type=Path, default=DATASET_PATH)
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--phi", type=float, default=PHI)
+    parser.add_argument("--steps", type=int, default=TRAINING_STEPS)
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+    parser.add_argument("--eval-interval", type=int, default=EVAL_INTERVAL)
+    parser.add_argument("--eval-episodes", type=int, default=EVAL_EPISODES)
+    parser.add_argument("--probe-size", type=int, default=256)
+    parser.add_argument("--device", choices=("cpu", "cuda"))
+    parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument("--results-dir", type=Path, default=RESULTS_DIR / "runs")
+    parser.add_argument("--checkpoint-dir", type=Path, default=CHECKPOINT_DIR / "runs")
+    return parser
 
 
 if __name__ == "__main__":

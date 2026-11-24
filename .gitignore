@@ -1,4 +1,38 @@
+# Python environments and bytecode.
 .venv/
-.idea/
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
+
+# Editor settings and tool caches.
+.idea/
+.vscode/
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local credentials and operating-system files.
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+
+# Temporary files and locally generated submission archives.
+*.log
+*.tmp
+*.zip
+*.7z
+
+# Verification runs and notebook scratch artifacts are not experiment results.
+/results/smoke/
+/results/smoke_suite/
+/results/notebook/
+
+# Bulk experiment weights can be regenerated from the saved run parameters.
+# Keep the existing demonstration checkpoints, datasets, run JSONs, reports,
+# notebook outputs and demo media available for reproducing the presentation.
+/checkpoints/runs/

@@ -4,12 +4,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from config import GAMMA, TAU, LEARNING_RATE, PHI, NUM_ACTION_SAMPLES
+from config import GAMMA, LEARNING_RATE, NUM_ACTION_SAMPLES, PHI, TAU
 from models import VAE, Critic, PerturbationActor
 
 
 class BCQ:
-    def __init__(self, state_dim, action_dim, max_action=1.0, device="cpu"):
+    def __init__(self, state_dim, action_dim, max_action=1.0, device="cpu", phi=PHI):
+        """Create BCQ with an explicit perturbation bound for ablations."""
         self.device = torch.device(device)
         self.max_action = max_action
 
@@ -18,17 +19,24 @@ class BCQ:
         self.critic = Critic(state_dim, action_dim).to(self.device)
         self.critic_target = copy.deepcopy(self.critic)
 
-        self.actor = PerturbationActor(state_dim, action_dim, max_action, PHI).to(self.device)
+        self.actor = PerturbationActor(state_dim, action_dim, max_action, phi).to(
+            self.device
+        )
         self.actor_target = copy.deepcopy(self.actor)
 
         self.vae_optimizer = torch.optim.Adam(self.vae.parameters(), lr=LEARNING_RATE)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=LEARNING_RATE)
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=LEARNING_RATE)
+        self.critic_optimizer = torch.optim.Adam(
+            self.critic.parameters(), lr=LEARNING_RATE
+        )
+        self.actor_optimizer = torch.optim.Adam(
+            self.actor.parameters(), lr=LEARNING_RATE
+        )
 
         self.gamma = GAMMA
         self.tau = TAU
 
     def train(self, batch):
+        """Update the VAE, twin critic, perturbation actor and target networks."""
         states, actions, rewards, next_states, dones = batch
 
         # Train VAE
@@ -56,9 +64,13 @@ class BCQ:
             sampled_actions = self.vae.decode(repeated_next_states)
             sampled_actions = self.actor_target(repeated_next_states, sampled_actions)
 
-            target_q1, target_q2 = self.critic_target(repeated_next_states, sampled_actions)
+            target_q1, target_q2 = self.critic_target(
+                repeated_next_states, sampled_actions
+            )
 
-            mixed_q = 0.75 * torch.min(target_q1, target_q2) + 0.25 * torch.max(target_q1, target_q2)
+            mixed_q = 0.75 * torch.min(target_q1, target_q2) + 0.25 * torch.max(
+                target_q1, target_q2
+            )
 
             mixed_q = mixed_q.view(batch_size, num_samples)
             best_q = mixed_q.max(dim=1, keepdim=True).values
@@ -68,7 +80,9 @@ class BCQ:
         # Train critic
         current_q1, current_q2 = self.critic(states, actions)
 
-        critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
+        critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(
+            current_q2, target_q
+        )
 
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
@@ -94,30 +108,33 @@ class BCQ:
             "actor_loss": actor_loss.item(),
         }
 
+    @torch.no_grad()
+    def policy_actions(self, states):
+        """Select the best VAE candidate independently for every state."""
+        repeated = states.repeat_interleave(NUM_ACTION_SAMPLES, dim=0)
+        actions = self.actor(repeated, self.vae.decode(repeated))
+        scores = self.critic.q1(repeated, actions).view(-1, NUM_ACTION_SAMPLES)
+        candidates = actions.view(len(states), NUM_ACTION_SAMPLES, -1)
+        return candidates[
+            torch.arange(len(states), device=self.device), scores.argmax(1)
+        ]
+
     def select_action(self, state):
-        state = np.asarray(state, dtype=np.float32)
-        state = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
-
-        with torch.no_grad():
-            repeated_state = state.repeat(NUM_ACTION_SAMPLES, 1)
-
-            actions = self.vae.decode(repeated_state)
-            actions = self.actor(repeated_state, actions)
-
-            q1 = self.critic.q1(repeated_state, actions)
-
-            best_index = q1.argmax(dim=0).item()
-            best_action = actions[best_index]
-
-        return best_action.cpu().numpy()
+        """Return one environment action using the same policy as Q diagnostics."""
+        states = torch.as_tensor(
+            np.asarray(state), dtype=torch.float32, device=self.device
+        )
+        return self.policy_actions(states.unsqueeze(0))[0].cpu().numpy()
 
     def _soft_update(self, source, target):
+        """Move target parameters toward online parameters by tau."""
         for source_param, target_param in zip(source.parameters(), target.parameters()):
             target_param.data.copy_(
                 self.tau * source_param.data + (1.0 - self.tau) * target_param.data
             )
 
     def save(self, path):
+        """Save networks and phi so ablation checkpoints retain their policy."""
         torch.save(
             {
                 "vae": self.vae.state_dict(),
@@ -125,12 +142,16 @@ class BCQ:
                 "actor": self.actor.state_dict(),
                 "critic_target": self.critic_target.state_dict(),
                 "actor_target": self.actor_target.state_dict(),
+                "phi": self.actor.phi,
             },
             path,
         )
 
     def load(self, path):
+        """Restore networks; accept historical checkpoints without phi metadata."""
         checkpoint = torch.load(path, map_location=self.device)
+        self.actor.phi = checkpoint.get("phi", self.actor.phi)
+        self.actor_target.phi = self.actor.phi
 
         self.vae.load_state_dict(checkpoint["vae"])
         self.critic.load_state_dict(checkpoint["critic"])
