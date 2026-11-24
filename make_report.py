@@ -1,4 +1,4 @@
-"""Aggregate independent seeds and plot offline navigation experiments."""
+# Aggregate independent seeds and plot offline navigation experiments.
 
 import argparse
 import csv
@@ -26,7 +26,7 @@ COLORS = {"bc": "tab:green", "td3": "tab:red", "bcq": "tab:blue"}
 
 
 def load_runs(directory, steps=None):
-    """Load complete runs, reject incompatible protocols, deduplicate repeats."""
+    # Load complete runs, reject incompatible protocols, deduplicate repeats.
     selected = {}
     protocols = set()
     for path in sorted(Path(directory).glob("*.json")):
@@ -67,7 +67,7 @@ def load_runs(directory, steps=None):
 
 
 def mean_std(values):
-    """Sample standard deviation across training seeds, never across episodes."""
+    # Sample standard deviation across training seeds, never across episodes.
     values = np.asarray(values, dtype=float)
     mean = float(values.mean())
     std = float(values.std(ddof=1)) if len(values) > 1 else float("nan")
@@ -75,7 +75,7 @@ def mean_std(values):
 
 
 def summarize(runs, section="final"):
-    """Build one aggregate row per algorithm, dataset and BCQ phi."""
+    # Build one aggregate row per algorithm, dataset and BCQ phi.
     groups = {}
     for run in runs:
         key = (run["dataset"], run["algo"], run["phi"])
@@ -91,7 +91,7 @@ def summarize(runs, section="final"):
 
 
 def save_table(rows, output, name):
-    """Export a machine-readable CSV and a readable mean ± std table."""
+    # Export a machine-readable CSV and a readable mean ± std table.
     if not rows:
         return
     with (output / f"{name}.csv").open("w", newline="", encoding="utf-8") as handle:
@@ -134,7 +134,7 @@ def save_table(rows, output, name):
 
 
 def plot_curve(ax, runs, metric, label, color, linestyle="-"):
-    """Plot the seed mean and ±1 standard deviation at common logged steps."""
+    # Plot the seed mean and ±1 standard deviation at common logged steps.
     if not runs:
         return
     by_run = [
@@ -162,7 +162,7 @@ def plot_curve(ax, runs, metric, label, color, linestyle="-"):
 
 
 def make_report(directory, output, steps=None):
-    """Produce result tables, Q diagnostics, learning curves and trajectories."""
+    # Produce result tables, Q diagnostics, learning curves and trajectories.
     runs = load_runs(directory, steps)
     if not runs:
         raise ValueError(f"No completed runs in {directory}")
@@ -276,7 +276,7 @@ def make_report(directory, output, steps=None):
 
 
 def plot_trajectories(runs, datasets, output):
-    """Plot one preselected seed per algorithm, including failed trajectories."""
+    # Plot one preselected seed per algorithm, including failed trajectories.
     if not datasets:
         return
     fig, axes = plt.subplots(
@@ -309,8 +309,10 @@ def plot_trajectories(runs, datasets, output):
 
 
 def main():
-    """CLI for reports from full experiments or isolated smoke runs."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    # CLI for reports from full experiments or isolated smoke runs.
+    parser = argparse.ArgumentParser(
+        description="Aggregate independent seeds and plot offline navigation experiments."
+    )
     parser.add_argument("--runs-dir", type=Path, default=RESULTS_DIR / "runs")
     parser.add_argument("--output-dir", type=Path, default=RESULTS_DIR / "report")
     parser.add_argument("--steps", type=int)

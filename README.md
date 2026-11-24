@@ -1,11 +1,10 @@
-# Offline RL: BC, TD3 и BCQ в непрерывной навигации
+# Offline Navigation: BC, TD3 and BCQ
 
-Агент движется по карте 10×10 с прямоугольным препятствием. Состояние —
-`[x, y, goal_x - x, goal_y - y]`, действие — вектор из `[-1, 1]²`.
-Обучение использует только фиксированный датасет; взаимодействия со средой
-нужны для оценки и не попадают в обучающие батчи.
+A continuous navigation agent moves across a 10x10 map with a rectangular obstacle.
+The state is `[x, y, goal_x - x, goal_y - y]`; actions lie in `[-1, 1]^2`.
+Training uses a fixed dataset. Evaluation transitions never enter the training data.
 
-## Установка
+## Setup
 
 Python 3.10+:
 
@@ -13,11 +12,11 @@ Python 3.10+:
 python -m pip install -r requirements.txt
 ```
 
-CUDA выбирается автоматически при наличии. Можно указать `--device cpu`
-или `--device cuda`. Гиперпараметры по умолчанию: batch=256, Adam lr=0.001,
-γ=0.99, τ=0.005, два скрытых слоя по 256 нейронов.
+CUDA is selected automatically when available. Use `--device cpu` or `--device cuda`
+to override it. Shared defaults: batch size 256, Adam learning rate 0.001,
+gamma 0.99, tau 0.005, and two hidden layers of 256 units.
 
-## Датасеты
+## Datasets
 
 ```bash
 python collect_dataset.py --all
@@ -25,20 +24,20 @@ python check_datasets.py
 python plot_datasets.py
 ```
 
-Готовые файлы уже находятся в `data/`:
+Dataset files are already available in `data/`.
 
-| Датасет | Содержание |
+| Dataset | Behavior |
 |---|---|
-| easy | Маршрутный контроллер с шумом 0.3 и 5% случайных действий |
-| noisy | Тот же контроллер: шум 0.6 и 25% случайных действий |
-| mixed | 40% маршрутного контроллера, 60% жадного контроллера, сталкивающегося с препятствием |
-| small | Смесь mixed, уменьшенная до 100 эпизодов |
+| easy | Waypoint controller; noise 0.3, 5% random actions |
+| noisy | Waypoint controller; noise 0.6, 25% random actions |
+| mixed | 40% waypoint controller, 60% greedy controller |
+| small | Mixed behavior with only 100 episodes |
 
-Старт при сборе сдвигается на ±0.3. `dones` содержит только истинные терминальные
-переходы (цель/столкновение). `timeouts` хранится отдельно: при ограничении
-длины эпизода Bellman target продолжает bootstrap.
+Training starts vary by +/-0.3. The greedy controller heads toward the goal through
+the obstacle. `dones` marks goals and collisions; `timeouts` is separate.
+Bellman targets keep bootstrapping at dataset timeouts.
 
-## Один эксперимент
+## Training
 
 ```bash
 python train.py --algo bcq --dataset data/mixed.npz --seed 0 --phi 0.05 --steps 100000
@@ -46,148 +45,133 @@ python train.py --algo bc --dataset data/easy.npz --seed 1 --steps 100000
 python train.py --algo td3 --dataset data/noisy.npz --seed 2 --steps 100000
 ```
 
-- `baselines.py`: BC с регрессией действий и offline TD3 без поведенческого ограничения.
-- `bcq.py`: условный VAE, ограниченная Φ-коррекция, двойной критик.
-- Общие размеры скрытых слоёв, optimizer, LR, batch, γ и τ одинаковы.
-- TD3 использует собственные обязательные механизмы: target smoothing
-  (noise=0.2, clip=0.5), clipped double Q и policy delay=2.
-- Все алгоритмы проходят заданное число шагов без ранней остановки и выбора
-  удачного промежуточного checkpoint. В таблицы входит финальная политика.
+BC fits dataset actions with MSE. Offline TD3 has no behavior constraint and uses
+target smoothing (noise 0.2, clip 0.5), twin critics, and policy delay 2.
+BCQ combines a conditional VAE, bounded perturbations and twin critics.
+All runs use their full budget without early stopping; tables use the final policy.
 
-Каждые 5000 шагов и в конце сохраняются:
+Every 5,000 updates and at the final step, the run records:
 
-| Поле JSON | Значение |
+| JSON field | Meaning |
 |---|---|
-| `success_rate` | Доля успешных эпизодов |
-| `collision_rate` | Доля столкновений |
-| `average_reward` | Средний недисконтированный reward эпизода |
-| `average_steps` | Средняя длина эпизода |
-| `q_dataset` | Среднее Q1(s, π(s)) на фиксированном батче состояний датасета |
-| `q_start` | Средняя Q1(s₀, a₀) в стартах оценочных эпизодов |
-| `discounted_return` | Измеренное G₀ = Σ γᵗ rₜ из этих стартов |
+| `success_rate` | Fraction of successful episodes |
+| `collision_rate` | Fraction of collision episodes |
+| `average_reward` | Mean undiscounted episode reward |
+| `average_steps` | Mean episode length |
+| `q_dataset` | Mean Q1(s, policy(s)) on fixed dataset states |
+| `q_start` | Mean Q1(s0, a0) at evaluation starts |
+| `discounted_return` | Measured sum of gamma^t * reward_t from those starts |
 
-У BC нет критика: его Q-поля равны `null`. Для сравнения Q с реальным return
-используйте **`q_start` и `discounted_return`**; `q_dataset` относится к другому
-распределению состояний и нужен для наблюдения за динамикой Q.
+BC has no critic, so its Q fields are `null`. Compare `q_start` with
+`discounted_return`; `q_dataset` uses a different state distribution.
+Measured returns stop at the episode horizon of 120 steps without a bootstrap.
 
-Оценка использует 30 эпизодов, одинаковые задачи и seed случайных действий
-BCQ для всех обучающих seeds. Состояния генераторов случайных чисел после оценки
-восстанавливаются: оценка не меняет дальнейшее обучение. Индексы фиксированного
-батча, SHA256 датасета, гиперпараметры и протокол оценки записываются в JSON.
-
-Результаты одного запуска:
+Evaluation uses 30 episodes and fixed task seeds. It restores the training RNG state.
+Run metadata includes probe indices, dataset SHA256, hyperparameters and evaluation settings.
 
 ```text
 results/runs/bcq_mixed_seed0.json
 checkpoints/runs/bcq_mixed_seed0_final.pt
 ```
 
-Для нестандартной Φ имя содержит `_phi0.25` и т.п. Повторный запуск получает
-суффикс `_repeat1` и не перезаписывает предыдущий JSON/checkpoint.
-JSON обновляется атомарно во время обучения; `status` показывает
-`running`, `completed` или `failed`.
+Nondefault Phi values add a suffix such as `_phi0.25`. Repeated runs receive
+`_repeat1`, `_repeat2`, etc. Logs are written atomically and record
+`running`, `completed` or `failed` status.
 
-Дополнительные аргументы: `--eval-episodes`, `--eval-interval`, `--batch-size`,
-`--probe-size`, `--threads`, `--results-dir`, `--checkpoint-dir`.
+Other options: `--eval-episodes`, `--eval-interval`, `--batch-size`, `--probe-size`,
+`--threads`, `--results-dir`, and `--checkpoint-dir`.
 
-## Главный эксперимент и ablation
+## Experiment Suites
 
 ```bash
 python run_experiments.py --suite main --steps 100000
 python run_experiments.py --suite ablation --steps 100000
 ```
 
-Или обе серии одной командой:
+Run both suites:
 
 ```bash
 python run_experiments.py --suite all --steps 100000
-```
-
-Главная серия: `{BC, TD3, BCQ} × {easy, noisy, mixed, small} × {0, 1, 2}` —
-36 запусков. Ablation: BCQ на mixed с Φ ∈ `{0, 0.05, 0.1, 0.25, 0.5, 1.0}`
-и теми же тремя seeds. Всего 51 уникальный запуск: три запуска Φ=0.05
-переиспользуются из главной серии.
-
-`--dry-run` выводит план. Можно изменить `--seeds 0 1 2`, `--device cuda`,
-`--eval-episodes 100`, каталоги данных/результатов/checkpoints. Повтор команды
-пропускает уже завершённые совместимые эксперименты; прерванный запуск начинается
-заново с отдельным именем, а не продолжается с середины.
-
-## Обобщение на новые старт/цель
-
-После каждого обучения автоматически выполняется отдельный held-out тест:
-старт равномерно в `[0.7, 1.7]²`, цель в `[8.3, 9.3]²`.
-Это новые пары в окрестностях исходных областей; тест не проверяет
-произвольные карты. Обучающие датасеты имеют фиксированную цель `(9, 9)`.
-Пары задач и seed оценки одинаковы для всех алгоритмов.
-
-Метрики лежат в `generalization`, основные — в `final`.
-Сохраняется также одна траектория каждого теста.
-
-## Отчёт
-
-```bash
 python make_report.py
 ```
 
-В `results/report/`:
+The main grid has 36 runs: `{BC, TD3, BCQ} x {easy, noisy, mixed, small} x {0, 1, 2}`.
+The ablation evaluates BCQ on mixed data at Phi values `0, 0.05, 0.1, 0.25, 0.5, 1.0`.
+Both suites share three Phi=0.05 runs, giving 51 unique experiments.
 
-- `results_table.{csv,md,png}` — основные результаты mean ± std;
-- `generalization_table.{csv,md,png}` — новые старт/цель;
-- `phi_table.{csv,md,png}` и `phi_ablation.png` — зависимость от Φ;
-- `q_curves.png` — Q(dataset), Q(start), измеренный G₀ для TD3 и BCQ;
-- `success_curves.png` — success по шагам обучения;
-- `trajectories.png` — BC / TD3 / BCQ с одним заранее выбранным seed;
-- `report_notes.txt` — полнота серии и пояснения к интерпретации.
+Use `--dry-run` to inspect the grid. Options include `--seeds`, `--device`,
+`--eval-episodes`, `--data-dir`, `--results-dir`, and `--checkpoint-dir`.
+Repeating a command skips completed compatible runs. Interrupted runs restart
+from scratch under a new filename.
 
-Стандартное отклонение считается **между обучающими seeds**, с `ddof=1`.
-При одном seed оно помечается `N/A`. Повторы одного seed не считаются
-независимыми наблюдениями: выбирается последний завершённый запуск.
-Отчёт отклоняет смешивание несовместимых бюджетов, протоколов оценки или разных
-версий датасета под одним именем. Для одного бюджета доступен `--steps 100000`;
-для отдельных серий — `--runs-dir` и `--output-dir`.
+Each final policy is also tested on new tasks: starts in `[0.7, 1.7]^2` and goals
+in `[8.3, 9.3]^2`. This tests nearby start/goal pairs, not arbitrary maps.
+Training datasets use the fixed goal `(9, 9)`. Results are stored in `generalization`.
 
-Return измеряется до конца эпизода, максимум 120 шагов, без bootstrap.
-Для политик, достигающих лимита, это может дополнительно объяснять отличие от Q,
-так как при обучении timeouts не являются терминальными состояниями.
+## Reports
 
-## Ноутбук с outputs
+`make_report.py` writes these files to `results/report/`:
 
-Откройте `BCQ_Offline_Navigation_Demo.ipynb`. В нём есть:
+| Files | Content |
+|---|---|
+| `results_table.{csv,md,png}` | Main results: mean +/- sample std across seeds |
+| `generalization_table.{csv,md,png}` | New start/goal results |
+| `phi_table.{csv,md,png}`, `phi_ablation.png` | Phi ablation |
+| `q_curves.png` | TD3/BCQ Q estimates and measured return |
+| `success_curves.png` | Success rate versus training updates |
+| `trajectories.png` | BC, TD3 and BCQ trajectories at a preselected seed |
+| `report_notes.txt` | Missing runs and interpretation notes |
 
-1. Ячейка Colab с `git clone` и установкой зависимостей.
-2. Реальный переход из mixed и последовательность VAE → perturbation → Q1/Q2
-   → target y → обновление критика и актёра с численными значениями до/после.
-3. Короткий запуск общего интерфейса обучения.
-4. Таблицы, графики и встроенная HTML-анимация BCQ.
+Standard deviation uses `ddof=1` across training seeds. One seed gives `N/A`.
+Repeated seeds count once, using the latest completed run. Incompatible budgets,
+evaluation protocols or dataset contents cannot be mixed. Use `--steps`,
+`--runs-dir` and `--output-dir` to select a separate series.
 
-Воспроизвести и сохранить все outputs:
+## Notebook and Presentation Files
+
+`BCQ_Offline_Navigation_Demo.ipynb` includes Colab setup with `git clone`, a real
+transition walkthrough, VAE/actor/critic values before and after updates,
+experiment plots, and an embedded navigation animation. Outputs are saved.
 
 ```bash
 python build_notebook.py --execute
 ```
 
-Исторический `checkpoints/bcq_final.pt` используется только в анимации.
-Он не считается запуском новой сравнительной серии. Если полного отчёта нет,
-ноутбук явно помечает показанный отчёт короткой проверочной серии.
+The animation uses the historical `checkpoints/bcq_final.pt` when available.
+That checkpoint is excluded from the new comparison. If only smoke results exist,
+the notebook labels them explicitly.
 
-## Проверка реализации
+| Submission item | Project files |
+|---|---|
+| Presentation slides | Not created; use this README, notebook and result plots |
+| Demo video | `demo.py` creates `results/bcq_demo.gif`; MP4 is not created |
+| Source code | All `.py` files and `requirements.txt` |
+| Algorithm update example | `BCQ_Offline_Navigation_Demo.ipynb` with saved outputs |
+| Submission ZIP | Not created |
+
+## Verification
 
 ```bash
 python -m unittest -v test_experiments
 python run_experiments.py --suite all --dry-run
 ```
 
-В рабочем каталоге выполнена проверочная серия всех 51 комбинаций: **100 шагов
-обучения и 2 оценочных эпизода**, в `results/smoke_suite/`. Это проверка выполнения
-кода и формирования отчётов, а не научный результат обучения до сходимости.
-Полная серия по 100000 шагов ещё не выполнена; на доступном CPU она займёт
-значительное время. Основной каталог `results/runs/` предназначен для неё.
+All 51 smoke experiments completed with **100 updates and 2 evaluation episodes**.
+Artifacts are in `results/smoke_suite/`, ignored by Git. These validate execution,
+not converged performance. The full 100,000-update suite has not been run.
 
-## Остальные файлы
+## Source Files
 
-`env.py` — среда без зависимости от Gymnasium; `gym_env.py` — Gymnasium-адаптер.
-`models.py` — сети BCQ, `dataset.py` — загрузчик переходов.
-`evaluate.py`, `evaluate_generalization.py`, `visualize.py`, `demo.py` сохранены
-для работы с историческим одиночным BCQ-checkpoint и его артефактами.
-Новые эксперименты и отчёты используют `train.py` и `make_report.py`.
+| File | Purpose |
+|---|---|
+| `env.py`, `gym_env.py` | Navigation environment and Gymnasium adapter |
+| `config.py` | Environment and training defaults |
+| `collect_dataset.py`, `dataset.py` | Dataset generation and loading |
+| `check_datasets.py`, `plot_datasets.py` | Dataset validation and visualization |
+| `models.py`, `bcq.py`, `baselines.py` | Networks and offline algorithms |
+| `train.py`, `run_experiments.py` | Individual runs and experiment grids |
+| `make_report.py` | Aggregate tables and comparison plots |
+| `build_notebook.py` | Notebook generation and execution |
+| `test_experiments.py` | Experiment regression tests |
+| `demo.py` | Historical BCQ animation |
+| `evaluate.py`, `evaluate_generalization.py`, `visualize.py` | Historical BCQ evaluation and plots |

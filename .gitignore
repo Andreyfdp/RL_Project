@@ -21,18 +21,16 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Temporary files and locally generated submission archives.
+# Temporary files and submission archives.
 *.log
 *.tmp
 *.zip
 *.7z
 
-# Verification runs and notebook scratch artifacts are not experiment results.
+# Smoke tests and notebook scratch files.
 /results/smoke/
 /results/smoke_suite/
 /results/notebook/
 
-# Bulk experiment weights can be regenerated from the saved run parameters.
-# Keep the existing demonstration checkpoints, datasets, run JSONs, reports,
-# notebook outputs and demo media available for reproducing the presentation.
+# Generated experiment weights.
 /checkpoints/runs/

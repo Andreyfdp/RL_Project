@@ -10,7 +10,7 @@ from models import VAE, Critic, PerturbationActor
 
 class BCQ:
     def __init__(self, state_dim, action_dim, max_action=1.0, device="cpu", phi=PHI):
-        """Create BCQ with an explicit perturbation bound for ablations."""
+        # Create BCQ with an explicit perturbation bound for ablations.
         self.device = torch.device(device)
         self.max_action = max_action
 
@@ -36,7 +36,7 @@ class BCQ:
         self.tau = TAU
 
     def train(self, batch):
-        """Update the VAE, twin critic, perturbation actor and target networks."""
+        # Update the VAE, twin critic, perturbation actor and target networks.
         states, actions, rewards, next_states, dones = batch
 
         # Train VAE
@@ -110,7 +110,7 @@ class BCQ:
 
     @torch.no_grad()
     def policy_actions(self, states):
-        """Select the best VAE candidate independently for every state."""
+        # Select the best VAE candidate independently for every state.
         repeated = states.repeat_interleave(NUM_ACTION_SAMPLES, dim=0)
         actions = self.actor(repeated, self.vae.decode(repeated))
         scores = self.critic.q1(repeated, actions).view(-1, NUM_ACTION_SAMPLES)
@@ -120,21 +120,21 @@ class BCQ:
         ]
 
     def select_action(self, state):
-        """Return one environment action using the same policy as Q diagnostics."""
+        # Return one environment action using the same policy as Q diagnostics.
         states = torch.as_tensor(
             np.asarray(state), dtype=torch.float32, device=self.device
         )
         return self.policy_actions(states.unsqueeze(0))[0].cpu().numpy()
 
     def _soft_update(self, source, target):
-        """Move target parameters toward online parameters by tau."""
+        # Move target parameters toward online parameters by tau.
         for source_param, target_param in zip(source.parameters(), target.parameters()):
             target_param.data.copy_(
                 self.tau * source_param.data + (1.0 - self.tau) * target_param.data
             )
 
     def save(self, path):
-        """Save networks and phi so ablation checkpoints retain their policy."""
+        # Save networks and phi so ablation checkpoints retain their policy.
         torch.save(
             {
                 "vae": self.vae.state_dict(),
@@ -148,7 +148,7 @@ class BCQ:
         )
 
     def load(self, path):
-        """Restore networks; accept historical checkpoints without phi metadata."""
+        # Restore networks; accept historical checkpoints without phi metadata.
         checkpoint = torch.load(path, map_location=self.device)
         self.actor.phi = checkpoint.get("phi", self.actor.phi)
         self.actor_target.phi = self.actor.phi

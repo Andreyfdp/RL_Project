@@ -5,14 +5,14 @@ import numpy as np
 from matplotlib.patches import Circle, Rectangle
 
 from config import (
-    MAP_WIDTH,
-    MAP_HEIGHT,
-    START_POSITION,
-    GOAL_POSITION,
-    OBSTACLES,
     AGENT_RADIUS,
+    GOAL_POSITION,
     GOAL_RADIUS,
+    MAP_HEIGHT,
+    MAP_WIDTH,
+    OBSTACLES,
     RESULTS_DIR,
+    START_POSITION,
     create_project_dirs,
 )
 

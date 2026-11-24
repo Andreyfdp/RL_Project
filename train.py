@@ -1,4 +1,4 @@
-"""Reproducible offline experiments: BC, TD3, BCQ and held-out tasks."""
+# Reproducible offline experiments: BC, TD3, BCQ and held-out tasks.
 
 import argparse
 import hashlib
@@ -39,7 +39,7 @@ PROBE_SEED = 20_000
 
 
 def set_seed(seed):
-    """Seed Python, NumPy and PyTorch before constructing any networks."""
+    # Seed Python, NumPy and PyTorch before constructing any networks.
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -51,7 +51,7 @@ def set_seed(seed):
 
 @contextmanager
 def isolated_rng(seed):
-    """Repeat diagnostics without consuming the training RNG stream."""
+    # Repeat diagnostics without consuming the training RNG stream.
     python_state, numpy_state = random.getstate(), np.random.get_state()
     try:
         with torch.random.fork_rng(devices=list(range(torch.cuda.device_count()))):
@@ -63,7 +63,7 @@ def isolated_rng(seed):
 
 
 def make_agent(algo, device="cpu", phi=PHI):
-    """Construct algorithms with shared dimensions and hyperparameters."""
+    # Construct algorithms with shared dimensions and hyperparameters.
     cls = {"bc": BC, "td3": TD3, "bcq": BCQ}[algo]
     kwargs = {"phi": phi} if algo == "bcq" else {}
     return cls(4, 2, max_action=1.0, device=device, **kwargs)
@@ -71,7 +71,7 @@ def make_agent(algo, device="cpu", phi=PHI):
 
 @torch.no_grad()
 def policy_q(agent, states):
-    """Mean Q1(s, pi(s)); BC has no critic and returns None."""
+    # Mean Q1(s, pi(s)); BC has no critic and returns None.
     if not hasattr(agent, "critic"):
         return None
     # Chunk the 100 BCQ candidates per state to bound diagnostic memory.
@@ -86,11 +86,7 @@ def policy_q(agent, states):
 
 
 def evaluate(agent, episodes=EVAL_EPISODES, seed=EVAL_SEED, generalization=False):
-    """Measure metrics and paired start-state Q/discounted return.
-
-    Return is sum(gamma**t * reward_t), truncated at the environment horizon.
-    No critic bootstrap is added to this measured return.
-    """
+    # Measure metrics and paired start-state Q/discounted return.
     if episodes <= 0:
         raise ValueError("episodes must be positive")
     rewards, returns, lengths, initial_q = [], [], [], []
@@ -150,7 +146,7 @@ def evaluate(agent, episodes=EVAL_EPISODES, seed=EVAL_SEED, generalization=False
 
 
 def write_json(path, payload):
-    """Atomically replace a log so interrupted writes cannot corrupt it."""
+    # Atomically replace a log so interrupted writes cannot corrupt it.
     temporary = path.with_suffix(".tmp")
     temporary.write_text(
         json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8"
@@ -159,7 +155,7 @@ def write_json(path, payload):
 
 
 def reserve_run(directory, name):
-    """Reserve a fresh filename, including repeated runs of the same seed."""
+    # Reserve a fresh filename, including repeated runs of the same seed.
     directory.mkdir(parents=True, exist_ok=True)
     index = 0
     while True:
@@ -174,7 +170,7 @@ def reserve_run(directory, name):
 
 
 def train(args=None):
-    """Train for the full budget and save independent experiment artifacts."""
+    # Train for the full budget and save independent experiment artifacts.
     args = build_parser().parse_args() if args is None else args
     for name in (
         "steps",
@@ -309,8 +305,10 @@ def train(args=None):
 
 
 def build_parser():
-    """Expose one CLI for individual runs and experiment suites."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    # Expose one CLI for individual runs and experiment suites.
+    parser = argparse.ArgumentParser(
+        description="Reproducible offline experiments: BC, TD3, BCQ and held-out tasks."
+    )
     parser.add_argument("--algo", choices=("bcq", "bc", "td3"), default="bcq")
     parser.add_argument("--dataset", type=Path, default=DATASET_PATH)
     parser.add_argument("--seed", type=int, default=SEED)

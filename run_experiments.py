@@ -1,4 +1,4 @@
-"""Run the 36-run benchmark and 18-run mixed-data perturbation ablation."""
+# Run the 36-run benchmark and 18-run mixed-data perturbation ablation.
 
 import argparse
 import hashlib
@@ -12,7 +12,7 @@ PHIS = (0.0, 0.05, 0.1, 0.25, 0.5, 1.0)
 
 
 def experiment_grid(suite, seeds):
-    """Yield unique settings; default-phi mixed BCQ runs serve both suites."""
+    # Yield unique settings; default-phi mixed BCQ runs serve both suites.
     settings = []
     if suite in ("main", "all"):
         settings.extend(
@@ -27,7 +27,7 @@ def experiment_grid(suite, seeds):
 
 
 def completed_match(path, args, digest):
-    """Skip only completed runs with the same data and evaluation protocol."""
+    # Skip only completed runs with the same data and evaluation protocol.
     try:
         run = json.loads(path.read_text(encoding="utf-8"))
         return (
@@ -46,8 +46,10 @@ def completed_match(path, args, digest):
 
 
 def main():
-    """Execute a resumable suite with a common budget and three seeds."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    # Execute a resumable suite with a common budget and three seeds.
+    parser = argparse.ArgumentParser(
+        description="Run the 36-run benchmark and 18-run mixed-data perturbation ablation."
+    )
     parser.add_argument("--suite", choices=("main", "ablation", "all"), default="all")
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     parser.add_argument("--steps", type=int, default=TRAINING_STEPS)

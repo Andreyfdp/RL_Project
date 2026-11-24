@@ -1,16 +1,12 @@
-"""Create a short animated rollout of the trained BCQ policy.
-
-Example:
-    python3 demo.py --show
-"""
+# Create a short animated rollout of the trained BCQ policy.
 
 import argparse
 import random
 
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation, PillowWriter
 import numpy as np
 import torch
+from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.patches import Circle
 
 from bcq import BCQ
@@ -20,7 +16,7 @@ from visualize import draw_environment
 
 
 def rollout(agent, seed):
-    """Run one seeded policy rollout and return its positions and info."""
+    # Run one seeded policy rollout and return its positions and info.
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -42,7 +38,7 @@ def rollout(agent, seed):
 def make_animation(positions, total_reward, info, output_path, fps, show):
     fig, ax = plt.subplots(figsize=(7, 7))
     draw_environment(ax)
-    line, = ax.plot([], [], color="#1565c0", linewidth=2.5, label="BCQ trajectory")
+    (line,) = ax.plot([], [], color="#1565c0", linewidth=2.5, label="BCQ trajectory")
     agent_marker = Circle(positions[0], radius=0.18, color="#d32f2f", zorder=5)
     ax.add_patch(agent_marker)
     ax.legend(loc="upper left")
@@ -78,7 +74,9 @@ def main():
     parser.add_argument("--output", default=RESULTS_DIR / "bcq_demo.gif", type=str)
     parser.add_argument("--fps", default=8, type=int)
     parser.add_argument("--seed", default=SEED + 4000, type=int)
-    parser.add_argument("--show", action="store_true", help="Also display the animation window.")
+    parser.add_argument(
+        "--show", action="store_true", help="Also display the animation window."
+    )
     args = parser.parse_args()
 
     create_project_dirs()

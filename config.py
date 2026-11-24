@@ -1,9 +1,6 @@
 from pathlib import Path
 
-
-# ============================================================
 # PROJECT PATHS
-# ============================================================
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -21,16 +18,12 @@ def create_project_dirs():
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ============================================================
 # RANDOMNESS
-# ============================================================
 
 SEED = 42
 
 
-# ============================================================
 # ENVIRONMENT
-# ============================================================
 
 MAP_WIDTH = 10.0
 MAP_HEIGHT = 10.0
@@ -38,14 +31,12 @@ MAP_HEIGHT = 10.0
 START_POSITION = (1.0, 1.0)
 GOAL_POSITION = (9.0, 9.0)
 
-# Rectangle:
-# (x_min, y_min, x_max, y_max)
+# Obstacle bounds: (x_min, y_min, x_max, y_max).
 OBSTACLES = [
     (4.2, 2.2, 5.8, 7.8),
 ]
 
-# Maximum movement during one step.
-# Action itself will always be in [-1, 1]^2.
+# Scale bounded actions to map movement.
 STEP_SIZE = 0.35
 
 AGENT_RADIUS = 0.15
@@ -54,9 +45,7 @@ GOAL_RADIUS = 0.45
 MAX_EPISODE_STEPS = 120
 
 
-# ============================================================
 # REWARD
-# ============================================================
 
 # Reward for getting closer to the goal.
 PROGRESS_REWARD_SCALE = 5.0
@@ -69,9 +58,7 @@ GOAL_REWARD = 10.0
 COLLISION_PENALTY = 5.0
 
 
-# ============================================================
 # OFFLINE DATASET
-# ============================================================
 
 DATASET_EPISODES = 1000
 
@@ -81,29 +68,41 @@ BEHAVIOR_NOISE_STD = 0.30
 # Probability of a completely random action in behavior policy.
 RANDOM_ACTION_PROB = 0.05
 
-# ------------------------------------------------------------
 # Experiment datasets (collect_dataset.py --mode ...)
-# ------------------------------------------------------------
 
 # Random shift of the start position (uniform in [-x, x] for both coordinates).
 START_NOISE = 0.30
 
-# Settings of every dataset mode.
-#   noise_std     - Gaussian noise added to actions
-#   random_prob   - chance of a completely random action
-#   good_fraction - share of episodes from the good (waypoint) policy,
-#                   all other episodes come from the bad (greedy) policy
+# Configure action noise, random actions and good-policy fractions.
 DATASET_MODES = {
-    "easy":  {"noise_std": 0.30, "random_prob": 0.05, "good_fraction": 1.0, "episodes": 1000},
-    "noisy": {"noise_std": 0.60, "random_prob": 0.25, "good_fraction": 1.0, "episodes": 1000},
-    "mixed": {"noise_std": 0.30, "random_prob": 0.05, "good_fraction": 0.4, "episodes": 1000},
-    "small": {"noise_std": 0.30, "random_prob": 0.05, "good_fraction": 0.4, "episodes": 100},
+    "easy": {
+        "noise_std": 0.30,
+        "random_prob": 0.05,
+        "good_fraction": 1.0,
+        "episodes": 1000,
+    },
+    "noisy": {
+        "noise_std": 0.60,
+        "random_prob": 0.25,
+        "good_fraction": 1.0,
+        "episodes": 1000,
+    },
+    "mixed": {
+        "noise_std": 0.30,
+        "random_prob": 0.05,
+        "good_fraction": 0.4,
+        "episodes": 1000,
+    },
+    "small": {
+        "noise_std": 0.30,
+        "random_prob": 0.05,
+        "good_fraction": 0.4,
+        "episodes": 100,
+    },
 }
 
 
-# ============================================================
 # BCQ TRAINING
-# ============================================================
 
 BATCH_SIZE = 256
 
@@ -124,16 +123,12 @@ NUM_ACTION_SAMPLES = 100
 LATENT_DIM = 4
 
 
-# ============================================================
 # EVALUATION
-# ============================================================
 
 EVALUATION_EPISODES = 100
 
 
-# ============================================================
 # QUICK TEST
-# ============================================================
 
 if __name__ == "__main__":
     create_project_dirs()

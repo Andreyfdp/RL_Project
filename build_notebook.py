@@ -1,4 +1,4 @@
-"""Build and optionally execute the presentation notebook with real outputs."""
+# Build and optionally execute the presentation notebook with real outputs.
 
 import argparse
 import textwrap
@@ -10,31 +10,34 @@ ROOT = Path(__file__).resolve().parent
 
 
 def build_notebook():
-    """Create a self-contained walkthrough of the actual BCQ update equations."""
+    # Create a self-contained walkthrough of the actual BCQ update equations.
     cells = []
 
     def markdown(source):
-        """Append a readable explanation to the notebook."""
+        # Append a readable explanation to the notebook.
         cells.append(nbf.v4.new_markdown_cell(textwrap.dedent(source).strip()))
 
     def code(source):
-        """Append executable code without incidental builder indentation."""
+        # Append executable code without incidental builder indentation.
         cells.append(nbf.v4.new_code_cell(textwrap.dedent(source).strip()))
 
-    markdown(r"""
-    # Offline navigation: BC, TD3 и BCQ
+    markdown(
+        r"""
+        # Offline navigation: BC, TD3 and BCQ
 
-    Ноутбук показывает реальный переход из `data/mixed.npz`, все стадии BCQ и
-    изменение сетей после одного шага. Сохранённые outputs вычислены на CPU.
-    Демонстрационные короткие обучения не являются результатами полного эксперимента.
-    """)
-    markdown("""
-    ## 1. Google Colab: клонирование и установка
+        This notebook follows one real transition from `data/mixed.npz` through a BCQ update.
+        Saved outputs were computed on CPU. Short demo runs are smoke tests, not final results.
+        """
+    )
+    markdown(
+        r"""
+        ## 1. Google Colab setup
 
-    В Colab выполните ячейку ниже. Локально она только сообщает текущий каталог.
-    Для GPU выберите Runtime → Change runtime type → GPU.
-    Новые локальные изменения появятся при клонировании после их публикации в репозитории.
-    """)
+        Run the next cell in Colab to clone the project and install dependencies.
+        Locally, it prints the working directory. Select Runtime > Change runtime type > GPU
+        for GPU training. Cloning includes local changes only after they are published.
+        """
+    )
     code("""
     import importlib.util
     import os
@@ -74,14 +77,15 @@ def build_notebook():
     print("Transitions:", len(dataset))
     print("PyTorch:", torch.__version__, "CUDA:", torch.cuda.is_available())
     """)
-    markdown(r"""
-    ## 2. Один реальный переход
+    markdown(
+        r"""
+        ## 2. One real transition
 
-    Состояние содержит `[x, y, goal_x - x, goal_y - y]`.
-    `done` обозначает цель или столкновение. Ограничение длины эпизода хранится
-    отдельно в `timeouts` и не зануляет Bellman bootstrap.
-    Для наглядности обновляем сети на одном переходе; обычное обучение использует batch=256.
-    """)
+        The state is `[x, y, goal_x - x, goal_y - y]`.
+        `done` marks a goal or collision. Time limits are stored separately in `timeouts`
+        and keep the Bellman bootstrap. This example updates one transition; training uses batch=256.
+        """
+    )
     code("""
     index = 0
     batch = tuple(t[index:index + 1].clone() for t in (
@@ -95,13 +99,15 @@ def build_notebook():
     with np.load("data/mixed.npz") as raw:
         print("timeout =", raw["timeouts"][index] if "timeouts" in raw else "not provided")
     """)
-    markdown(r"""
-    ## 3. VAE: encode → sample → decode → обновление
+    markdown(
+        r"""
+        ## 3. VAE: encode, sample, decode and update
 
-    $z=\mu+\sigma\epsilon$, $L_{VAE}=MSE(\hat a,a)+0.5 KL$.
-    Одни и те же $\epsilon$ и latent probe используются до и после обновления,
-    чтобы изменение реконструкции не объяснялось новой случайной выборкой.
-    """)
+        $z=\mu+\sigma\epsilon$, $L_{VAE}=MSE(\hat a,a)+0.5 KL$.
+        Use the same $\epsilon$ and latent probe before and after the update to isolate
+        parameter changes from sampling noise.
+        """
+    )
     code("""
     epsilon = torch.randn(1, agent.vae.latent_dim)
     probe_z = torch.randn_like(epsilon).clamp(-0.5, 0.5)
@@ -128,12 +134,14 @@ def build_notebook():
     print("Reconstruction after: ", reconstruction_after.numpy().round(5))
     print("Fixed latent candidate before/after:", candidate_before.numpy(), candidate.numpy())
     """)
-    markdown(r"""
-    ## 4. Perturbation → Q1, Q2
+    markdown(
+        r"""
+        ## 4. Perturbation and twin Q estimates
 
-    $\tilde a=clip(a_{VAE}+\Phi\tanh(\xi(s,a_{VAE})), -1,1)$.
-    Коррекция каждой координаты ограничена Φ=0.05. Затем обе Q-сети оценивают действие.
-    """)
+        $\tilde a=clip(a_{VAE}+\Phi\tanh(\xi(s,a_{VAE})), -1,1)$.
+        Each action correction is bounded by Phi=0.05. Both critics then score the action.
+        """
+    )
     code("""
     with torch.no_grad():
         perturbed_before = agent.actor(states, candidate)
@@ -143,13 +151,15 @@ def build_notebook():
     print("Correction:", (perturbed_before - candidate).numpy().round(5))
     print("Q1, Q2:", candidate_q1.item(), candidate_q2.item())
     """)
-    markdown(r"""
-    ## 5. Target y из десяти кандидатов следующего состояния
+    markdown(
+        r"""
+        ## 5. Target y from ten next-state candidates
 
-    $Q_{mix}=0.75\min(Q_1',Q_2')+0.25\max(Q_1',Q_2')$,
-    $y=r+\gamma(1-done)\max_i Q_{mix}(s',a_i')$.
-    Target рассчитывается без градиентов, после обновления VAE, как в `BCQ.train`.
-    """)
+        $Q_{mix}=0.75\min(Q_1',Q_2')+0.25\max(Q_1',Q_2')$,
+        $y=r+\gamma(1-done)\max_i Q_{mix}(s',a_i')$.
+        Compute the target without gradients after the VAE update, as in `BCQ.train`.
+        """
+    )
     code("""
     with torch.no_grad():
         repeated_next = next_states.repeat_interleave(10, dim=0)
@@ -165,12 +175,14 @@ def build_notebook():
               f"{target_q1[i].item():9.5f} {target_q2[i].item():9.5f} {mixed_q[i].item():9.5f}")
     print(f"y = {rewards.item():.6f} + {agent.gamma} * (1 - {dones.item():.0f}) * {best_q.item():.6f} = {target_y.item():.6f}")
     """)
-    markdown(r"""
-    ## 6. Обновление критика: до / после
+    markdown(
+        r"""
+        ## 6. Critic update: before and after
 
-    Минимизируем $(Q_1(s,a)-y)^2+(Q_2(s,a)-y)^2$ на **действии датасета**.
-    После шага сравниваем с тем же фиксированным y.
-    """)
+        Minimize $(Q_1(s,a)-y)^2+(Q_2(s,a)-y)^2$ on the **dataset action**.
+        Compare both critics against the same fixed target after the update.
+        """
+    )
     code("""
     current_q1, current_q2 = agent.critic(states, actions)
     critic_loss = F.mse_loss(current_q1, target_y) + F.mse_loss(current_q2, target_y)
@@ -187,13 +199,15 @@ def build_notebook():
     print("Q1, Q2 after: ", q_after)
     print("Critic loss before / after:", critic_loss.item(), critic_loss_after.item())
     """)
-    markdown(r"""
-    ## 7. Обновление актёра и target-сетей: до / после
+    markdown(
+        r"""
+        ## 7. Actor and target updates: before and after
 
-    $L_{actor}=-Q_1(s,\xi(s,a_{VAE}))$. VAE-кандидат отделён от графа.
-    Сравниваем до/после на одном кандидате и уже обновлённом критике.
-    Один шаг Adam не гарантирует улучшение каждой отдельной оценки.
-    """)
+        $L_{actor}=-Q_1(s,\xi(s,a_{VAE}))$. Detach the VAE candidate from its computation graph.
+        Compare the same candidate before and after the actor step using the updated critic.
+        One Adam step does not guarantee that every individual Q estimate improves.
+        """
+    )
     code("""
     fixed_candidate = candidate.detach()
     before_action = agent.actor(states, fixed_candidate)
@@ -225,20 +239,22 @@ def build_notebook():
     plt.tight_layout()
     plt.show()
     """)
-    markdown("""
-    ## 8. Короткий пример общего train.py
+    markdown(
+        r"""
+        ## 8. Short training example
 
-    Ниже 100 шагов BC на mixed — проверка интерфейса, не обучение до сходимости.
-    Файл сохраняется отдельно от основной серии. Для полного эксперимента:
+        The next cell runs 100 BC updates on mixed data to check the training interface.
+        Its artifacts are separate from the main experiment. Run the full suite with:
 
-    ```bash
-    python run_experiments.py --suite all --steps 100000
-    python make_report.py
-    ```
+        ```bash
+        python run_experiments.py --suite all --steps 100000
+        python make_report.py
+        ```
 
-    Это 36 основных запусков и ещё 15 уникальных запусков ablation: Φ=0.05 на mixed
-    переиспользуется. Обобщение на новых стартах и целях оценивается после каждого запуска.
-    """)
+        There are 36 main runs and 15 additional ablation runs. Mixed-data BCQ at Phi=0.05
+        is shared by both suites. Each run also evaluates new start/goal pairs.
+        """
+    )
     code("""
     args = build_parser().parse_args([
         "--algo", "bc", "--dataset", "data/mixed.npz", "--seed", "0", "--steps", "100",
@@ -251,14 +267,16 @@ def build_notebook():
     print(json.dumps(demo_run["history"][-1], indent=2))
     print("BC has no critic: q_dataset and q_start are null.")
     """)
-    markdown("""
-    ## 9. Таблицы и графики серии
+    markdown(
+        r"""
+        ## 9. Experiment tables and plots
 
-    Показываем полный отчёт, если он существует; иначе — явно обозначенный отчёт
-    проверочной серии. `mean ± std` считается между seeds, а не между эпизодами.
-    Q на состояниях датасета и return из старта имеют разные распределения состояний:
-    непосредственно сравниваем `Q(start)` с `G0`.
-    """)
+        Show the main report when available; otherwise label the smoke-test report explicitly.
+        Mean and standard deviation are computed across training seeds, not episodes.
+        Dataset Q and start-state return use different state distributions.
+        Compare `Q(start)` directly with the measured `G0`.
+        """
+    )
     code("""
     from make_report import make_report
 
@@ -285,13 +303,14 @@ def build_notebook():
             if path.exists():
                 display(Image(filename=str(path)))
     """)
-    markdown("""
-    ## 10. Анимация сохранённой BCQ-политики
+    markdown(
+        r"""
+        ## 10. Saved BCQ policy animation
 
-    Используем существующий исторический checkpoint для иллюстрации движения.
-    Он не входит в новую таблицу BC/TD3/BCQ. Если его нет, коротко обучаем
-    демонстрационную модель и явно указываем это в выводе.
-    """)
+        Use the historical checkpoint to illustrate navigation. It is excluded from the new
+        BC/TD3/BCQ comparison. If it is missing, train a short demo model and label it explicitly.
+        """
+    )
     code("""
     from demo import rollout
 
@@ -315,7 +334,7 @@ def build_notebook():
     marker, = ax.plot([], [], "o", color="tab:red")
 
     def update(frame):
-        '''Draw the observed trajectory up to the current time step.'''
+        # Draw the current trajectory.
         line.set_data(positions[:frame + 1, 0], positions[:frame + 1, 1])
         marker.set_data([positions[frame, 0]], [positions[frame, 1]])
         return line, marker
@@ -325,15 +344,16 @@ def build_notebook():
     plt.close(fig)
     display(HTML(html))
     """)
-    markdown("""
-    ## Интерпретация
+    markdown(
+        r"""
+        ## Interpretation
 
-    Рост Q сам по себе не означает улучшение политики: проверяйте success, collision
-    и измеренный дисконтированный return. Возврат ограничен горизонтом 120 шагов;
-    Bellman targets продолжают bootstrap на timeouts датасета, поэтому для застрявших
-    политик это дополнительный источник расхождения. Обобщение здесь означает новые
-    пары старт/цель в окрестностях исходных областей, не новые карты.
-    """)
+        Increasing Q alone does not establish policy improvement. Check success, collisions
+        and measured discounted return. Returns stop at the 120-step horizon, while dataset
+        timeouts retain Bellman bootstrapping. This can also cause Q/return differences.
+        Generalization uses new start/goal pairs near the original regions, not new maps.
+        """
+    )
     return nbf.v4.new_notebook(
         cells=cells,
         metadata={
@@ -348,8 +368,10 @@ def build_notebook():
 
 
 def main():
-    """Write the notebook, optionally execute every cell and retain its outputs."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    # Write the notebook, optionally execute every cell and retain its outputs.
+    parser = argparse.ArgumentParser(
+        description="Build and optionally execute the presentation notebook with real outputs."
+    )
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     notebook = build_notebook()

@@ -1,8 +1,4 @@
-"""Evaluate BCQ on small, seeded start/goal perturbations.
-
-This is a robustness diagnostic, not the headline benchmark: the provided
-checkpoint was trained only on the fixed default task.
-"""
+# Evaluate BCQ on small, seeded start/goal perturbations.
 
 import argparse
 import random
@@ -16,7 +12,7 @@ from env import NavigationEnv
 
 
 def sample_task(rng):
-    """Sample free positions near the original start and goal regions."""
+    # Sample free positions near the original start and goal regions.
     start = rng.uniform(low=(0.7, 0.7), high=(1.7, 1.7)).astype(np.float32)
     goal = rng.uniform(low=(8.3, 8.3), high=(9.3, 9.3)).astype(np.float32)
     return start, goal
@@ -54,7 +50,9 @@ def evaluate(agent, episodes, seed):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="BCQ robustness check on perturbed tasks.")
+    parser = argparse.ArgumentParser(
+        description="BCQ robustness check on perturbed tasks."
+    )
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--seed", type=int, default=SEED + 5000)
     args = parser.parse_args()
@@ -66,7 +64,9 @@ def main():
     print("Perturbed start/goal robustness diagnostic")
     print("This checkpoint was trained on the fixed default task.")
     for name, value in metrics.items():
-        print(f"{name}: {value:.3f}" if isinstance(value, float) else f"{name}: {value}")
+        print(
+            f"{name}: {value:.3f}" if isinstance(value, float) else f"{name}: {value}"
+        )
 
 
 if __name__ == "__main__":

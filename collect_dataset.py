@@ -1,10 +1,4 @@
-"""Collecting offline datasets for the BCQ experiments.
-
-Examples:
-    python collect_dataset.py                    # old default dataset (data/offline_dataset.npz)
-    python collect_dataset.py --mode mixed       # one experiment dataset -> data/mixed.npz
-    python collect_dataset.py --all              # all four: easy, noisy, mixed, small
-"""
+# Collecting offline datasets for the BCQ experiments.
 
 import argparse
 import json
@@ -12,22 +6,19 @@ import json
 import numpy as np
 
 from config import (
+    BEHAVIOR_NOISE_STD,
     DATA_DIR,
-    DATASET_PATH,
     DATASET_EPISODES,
     DATASET_MODES,
-    BEHAVIOR_NOISE_STD,
+    DATASET_PATH,
     RANDOM_ACTION_PROB,
-    START_NOISE,
     SEED,
+    START_NOISE,
     create_project_dirs,
 )
-
 from env import NavigationEnv
 
-
-# Policy type labels, we are saving them in the dataset so later it is easy to see
-# which episode came from which policy (for plots and for sanity checks)
+# Store policy labels for dataset analysis.
 GOOD_POLICY = 0
 BAD_POLICY = 1
 
@@ -49,25 +40,31 @@ def get_route(rng):
 
 
 def add_noise(direction, rng, noise_std, random_prob):
-    # Adding Gaussian noise to the clean direction, so the data is not perfect
+    # Add Gaussian action noise.
     noise = rng.normal(loc=0.0, scale=noise_std, size=2)
     action = direction + noise
 
-    # And sometimes just throwing away everything and taking a fully random action
+    # Occasionally sample a random action.
     if rng.random() < random_prob:
         action = rng.uniform(-1.0, 1.0, size=2)
 
     return np.clip(action, -1.0, 1.0).astype(np.float32)
 
 
-def behavior_policy(position, waypoints, waypoint_index, rng,
-                    noise_std=BEHAVIOR_NOISE_STD, random_prob=RANDOM_ACTION_PROB):
-    # GOOD policy: going from waypoint to waypoint around the obstacle
+def behavior_policy(
+    position,
+    waypoints,
+    waypoint_index,
+    rng,
+    noise_std=BEHAVIOR_NOISE_STD,
+    random_prob=RANDOM_ACTION_PROB,
+):
+    # Follow waypoints around the obstacle.
     target = waypoints[waypoint_index]
 
     distance = np.linalg.norm(target - position)
 
-    # If we are already close to the current waypoint, switching to the next one
+    # Advance when the current waypoint is reached.
     if distance < 0.45 and waypoint_index < len(waypoints) - 1:
         waypoint_index += 1
         target = waypoints[waypoint_index]
@@ -85,13 +82,10 @@ def behavior_policy(position, waypoints, waypoint_index, rng,
     return action, waypoint_index
 
 
-def greedy_policy(position, goal, rng,
-                  noise_std=BEHAVIOR_NOISE_STD, random_prob=RANDOM_ACTION_PROB):
-    # BAD policy: just going straight to the goal and not caring about the obstacle at all.
-    # The straight line from start to goal is going right through the obstacle, so this
-    # policy is almost always crashing. The point is that near the start its actions are
-    # looking pretty similar to the good ones, so only the Q-function (not copying) can
-    # tell which actions are actually good
+def greedy_policy(
+    position, goal, rng, noise_std=BEHAVIOR_NOISE_STD, random_prob=RANDOM_ACTION_PROB
+):
+    # Head straight toward the goal, ignoring obstacles.
     direction = goal - position
     norm = np.linalg.norm(direction)
 
@@ -103,13 +97,10 @@ def greedy_policy(position, goal, rng,
     return add_noise(direction, rng, noise_std, random_prob)
 
 
-def collect_dataset(mode=None, episodes=None, out_path=None, seed=SEED,
-                    start_noise=None, verbose=True):
-    """Collecting one dataset and returning its statistics.
-
-    mode=None means the old default dataset (exactly like it was before: no start noise,
-    only the good policy), so data/offline_dataset.npz is staying reproducible.
-    """
+def collect_dataset(
+    mode=None, episodes=None, out_path=None, seed=SEED, start_noise=None, verbose=True
+):
+    # Collecting one dataset and returning its statistics.
     create_project_dirs()
 
     if mode is None:
@@ -123,7 +114,9 @@ def collect_dataset(mode=None, episodes=None, out_path=None, seed=SEED,
         default_out = DATASET_PATH
     else:
         if mode not in DATASET_MODES:
-            raise ValueError(f"Unknown mode {mode!r}, choose from {list(DATASET_MODES)}")
+            raise ValueError(
+                f"Unknown mode {mode!r}, choose from {list(DATASET_MODES)}"
+            )
         settings = dict(DATASET_MODES[mode])
         default_start_noise = START_NOISE
         default_out = DATA_DIR / f"{mode}.npz"
@@ -136,14 +129,14 @@ def collect_dataset(mode=None, episodes=None, out_path=None, seed=SEED,
     random_prob = settings["random_prob"]
     good_fraction = settings["good_fraction"]
 
-    # One generator for the policies, and the env has its own one for the start noise
+    # Keep policy and environment RNGs separate.
     rng = np.random.default_rng(seed)
     env = NavigationEnv(seed=seed, start_noise=start_noise)
 
     states, actions, rewards, next_states, dones = [], [], [], [], []
     timeouts, episode_ids, policy_types = [], [], []
 
-    # Counting outcomes separately for good and bad episodes, so we can see what is inside
+    # Track outcomes by policy type.
     outcomes = {
         GOOD_POLICY: {"episodes": 0, "success": 0, "collision": 0, "timeout": 0},
         BAD_POLICY: {"episodes": 0, "success": 0, "collision": 0, "timeout": 0},
@@ -153,8 +146,7 @@ def collect_dataset(mode=None, episodes=None, out_path=None, seed=SEED,
     for episode in range(episodes):
         state = env.reset()
 
-        # Choosing which policy is playing this episode. When everything is good policy we
-        # are not touching rng here at all, so the old dataset stays exactly the same
+        # Avoid extra RNG draws for the all-good dataset.
         if good_fraction < 1.0 and rng.random() >= good_fraction:
             policy_type = BAD_POLICY
         else:
@@ -187,10 +179,7 @@ def collect_dataset(mode=None, episodes=None, out_path=None, seed=SEED,
 
             next_state, reward, done, info = env.step(action)
 
-            # Important thing: "done" in the dataset means only REAL ends of the episode
-            # (goal or crash). If we just ran out of steps, the episode is cut, but the
-            # state is not terminal, so the Q-target should still look into the future.
-            # That's why timeouts are saved in a separate array
+            # Only goals and collisions are terminal; timeouts still bootstrap.
             terminal = info["success"] or info["collision"]
             timeout = done and not terminal
 
@@ -282,7 +271,9 @@ def print_summary(s):
 
 def print_table(summaries):
     # Making a small markdown table, it is easy to paste straight into README or slides
-    print("| Dataset | Episodes | Transitions | Good policy | Success | Collision | Timeout | Avg reward |")
+    print(
+        "| Dataset | Episodes | Transitions | Good policy | Success | Collision | Timeout | Avg reward |"
+    )
     print("|---|---:|---:|---:|---:|---:|---:|---:|")
     for s in summaries:
         print(
@@ -295,14 +286,24 @@ def print_table(summaries):
 
 def main():
     parser = argparse.ArgumentParser(description="Collecting offline datasets for BCQ.")
-    parser.add_argument("--mode", choices=list(DATASET_MODES), default=None,
-                        help="Dataset type. Without it the old default dataset is created.")
+    parser.add_argument(
+        "--mode",
+        choices=list(DATASET_MODES),
+        default=None,
+        help="Dataset type. Without it the old default dataset is created.",
+    )
     parser.add_argument("--all", action="store_true", help="Collect all dataset modes.")
-    parser.add_argument("--episodes", type=int, default=None, help="Override number of episodes.")
+    parser.add_argument(
+        "--episodes", type=int, default=None, help="Override number of episodes."
+    )
     parser.add_argument("--out", type=str, default=None, help="Output .npz path.")
     parser.add_argument("--seed", type=int, default=SEED)
-    parser.add_argument("--start-noise", type=float, default=None,
-                        help="Random start shift (default: 0.3 for modes, 0 for the old dataset).")
+    parser.add_argument(
+        "--start-noise",
+        type=float,
+        default=None,
+        help="Random start shift (default: 0.3 for modes, 0 for the old dataset).",
+    )
     args = parser.parse_args()
 
     if args.all:
@@ -310,8 +311,12 @@ def main():
             parser.error("--all can't be used together with --mode or --out")
 
         summaries = [
-            collect_dataset(mode=mode, episodes=args.episodes, seed=args.seed,
-                            start_noise=args.start_noise)
+            collect_dataset(
+                mode=mode,
+                episodes=args.episodes,
+                seed=args.seed,
+                start_noise=args.start_noise,
+            )
             for mode in DATASET_MODES
         ]
 
@@ -322,8 +327,13 @@ def main():
         print_table(summaries)
         print(f"\nStatistics saved to: {stats_path}")
     else:
-        collect_dataset(mode=args.mode, episodes=args.episodes, out_path=args.out,
-                        seed=args.seed, start_noise=args.start_noise)
+        collect_dataset(
+            mode=args.mode,
+            episodes=args.episodes,
+            out_path=args.out,
+            seed=args.seed,
+            start_noise=args.start_noise,
+        )
 
 
 if __name__ == "__main__":

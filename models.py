@@ -139,5 +139,13 @@ if __name__ == "__main__":
     print("Perturbed actions:", perturbed_actions.shape)
     print("Q1:", q1.shape)
     print("Q2:", q2.shape)
-    print("Generated action range:", generated_actions.min().item(), generated_actions.max().item())
-    print("Perturbed action range:", perturbed_actions.min().item(), perturbed_actions.max().item())
+    print(
+        "Generated action range:",
+        generated_actions.min().item(),
+        generated_actions.max().item(),
+    )
+    print(
+        "Perturbed action range:",
+        perturbed_actions.min().item(),
+        perturbed_actions.max().item(),
+    )

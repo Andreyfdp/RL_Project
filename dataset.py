@@ -62,13 +62,9 @@ class OfflineDataset:
 
 
 if __name__ == "__main__":
-    from config import DATASET_PATH, BATCH_SIZE
+    from config import BATCH_SIZE, DATASET_PATH
 
-    device = (
-        "cuda"
-        if torch.cuda.is_available()
-        else "cpu"
-    )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     dataset = OfflineDataset(
         path=DATASET_PATH,
@@ -80,9 +76,7 @@ if __name__ == "__main__":
     print(f"Transitions: {len(dataset)}")
     print()
 
-    states, actions, rewards, next_states, dones = dataset.sample(
-        BATCH_SIZE
-    )
+    states, actions, rewards, next_states, dones = dataset.sample(BATCH_SIZE)
 
     print("Batch shapes:")
     print("States:", states.shape)

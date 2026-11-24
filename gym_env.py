@@ -1,7 +1,7 @@
-"""Gymnasium adapter for the project's continuous 2D navigation task."""
+# Gymnasium adapter for the project's continuous 2D navigation task.
 
-import numpy as np
 import gymnasium as gym
+import numpy as np
 from gymnasium import spaces
 
 from config import GOAL_POSITION, MAP_HEIGHT, MAP_WIDTH, SEED, START_POSITION
@@ -9,11 +9,7 @@ from env import NavigationEnv
 
 
 class GymnasiumNavigationEnv(gym.Env):
-    """Expose :class:`NavigationEnv` through Gymnasium's reset/step contract.
-
-    ``options`` may contain a ``start_position`` and a ``goal_position``.  Both
-    must be supplied together and must be collision-free positions.
-    """
+    # Expose :class:`NavigationEnv` through Gymnasium's reset/step contract.
 
     metadata = {"render_modes": ["ansi"], "render_fps": 8}
 
@@ -32,7 +28,9 @@ class GymnasiumNavigationEnv(gym.Env):
         )
         self.observation_space = spaces.Box(
             low=np.array([0.0, 0.0, -MAP_WIDTH, -MAP_HEIGHT], dtype=np.float32),
-            high=np.array([MAP_WIDTH, MAP_HEIGHT, MAP_WIDTH, MAP_HEIGHT], dtype=np.float32),
+            high=np.array(
+                [MAP_WIDTH, MAP_HEIGHT, MAP_WIDTH, MAP_HEIGHT], dtype=np.float32
+            ),
             dtype=np.float32,
         )
 

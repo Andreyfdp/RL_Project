@@ -1,4 +1,4 @@
-"""Behavior cloning and unconstrained offline TD3 on the shared BCQ networks."""
+# Behavior cloning and unconstrained offline TD3 on the shared BCQ networks.
 
 import copy
 
@@ -12,7 +12,7 @@ from models import Critic
 
 
 class Actor(nn.Module):
-    """Two 256-unit hidden layers, matching BCQ's actor capacity and bounds."""
+    # Two 256-unit hidden layers, matching BCQ's actor capacity and bounds.
 
     def __init__(self, state_dim, action_dim, max_action=1.0):
         super().__init__()
@@ -26,12 +26,12 @@ class Actor(nn.Module):
         )
 
     def forward(self, states):
-        """Map observations to bounded continuous actions."""
+        # Map observations to bounded continuous actions.
         return self.max_action * torch.tanh(self.net(states))
 
 
 class BC:
-    """Supervised action regression; no reward optimization or learned critic."""
+    # Supervised action regression; no reward optimization or learned critic.
 
     def __init__(self, state_dim, action_dim, max_action=1.0, device="cpu"):
         self.device = torch.device(device)
@@ -43,7 +43,7 @@ class BC:
         )
 
     def train(self, batch):
-        """Fit dataset actions with the same optimizer and LR as BCQ."""
+        # Fit dataset actions with the same optimizer and LR as BCQ.
         states, actions, *_ = batch
         loss = F.mse_loss(self.actor(states), actions)
         self.actor_optimizer.zero_grad()
@@ -53,28 +53,28 @@ class BC:
 
     @torch.no_grad()
     def policy_actions(self, states):
-        """Return a batch of policy actions for evaluation."""
+        # Return a batch of policy actions for evaluation.
         return self.actor(states)
 
     def select_action(self, state):
-        """Return a NumPy action compatible with NavigationEnv."""
+        # Return a NumPy action compatible with NavigationEnv.
         states = torch.as_tensor(
             np.asarray(state), dtype=torch.float32, device=self.device
         )
         return self.policy_actions(states.unsqueeze(0))[0].cpu().numpy()
 
     def save(self, path):
-        """Save inference weights; experiment metadata lives in the run JSON."""
+        # Save inference weights; experiment metadata lives in the run JSON.
         torch.save({"actor": self.actor.state_dict()}, path)
 
     def load(self, path):
-        """Load inference weights on the selected device."""
+        # Load inference weights on the selected device.
         checkpoint = torch.load(path, map_location=self.device)
         self.actor.load_state_dict(checkpoint["actor"])
 
 
 class TD3(BC):
-    """TD3 trained only on offline batches, without a behavior constraint."""
+    # TD3 trained only on offline batches, without a behavior constraint.
 
     def __init__(self, state_dim, action_dim, max_action=1.0, device="cpu"):
         super().__init__(state_dim, action_dim, max_action, device)
@@ -91,7 +91,7 @@ class TD3(BC):
         self.updates = 0
 
     def train(self, batch):
-        """Use clipped double Q, target smoothing, and delayed actor updates."""
+        # Use clipped double Q, target smoothing, and delayed actor updates.
         states, actions, rewards, next_states, dones = batch
         self.updates += 1
         with torch.no_grad():
@@ -128,7 +128,7 @@ class TD3(BC):
         return losses
 
     def save(self, path):
-        """Save policy and both online/target critics for diagnostics."""
+        # Save policy and both online/target critics for diagnostics.
         torch.save(
             {
                 name: getattr(self, name).state_dict()
@@ -138,7 +138,7 @@ class TD3(BC):
         )
 
     def load(self, path):
-        """Restore inference and target networks."""
+        # Restore inference and target networks.
         checkpoint = torch.load(path, map_location=self.device)
         for name in ("actor", "actor_target", "critic", "critic_target"):
             getattr(self, name).load_state_dict(checkpoint[name])

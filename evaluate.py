@@ -6,7 +6,13 @@ import torch
 
 from bcq import BCQ
 from collect_dataset import behavior_policy, get_route
-from config import MODEL_PATH, RESULTS_DIR, SEED, EVALUATION_EPISODES, create_project_dirs
+from config import (
+    EVALUATION_EPISODES,
+    MODEL_PATH,
+    RESULTS_DIR,
+    SEED,
+    create_project_dirs,
+)
 from env import NavigationEnv
 
 
@@ -45,7 +51,9 @@ def evaluate_random(episodes, seed):
 
                 break
 
-    return create_metrics(rewards, steps, successes, collisions, episodes), first_trajectory
+    return create_metrics(
+        rewards, steps, successes, collisions, episodes
+    ), first_trajectory
 
 
 def evaluate_behavior(episodes, seed):
@@ -92,7 +100,9 @@ def evaluate_behavior(episodes, seed):
 
                 break
 
-    return create_metrics(rewards, steps, successes, collisions, episodes), first_trajectory
+    return create_metrics(
+        rewards, steps, successes, collisions, episodes
+    ), first_trajectory
 
 
 def evaluate_bcq(agent, episodes, seed):
@@ -134,7 +144,9 @@ def evaluate_bcq(agent, episodes, seed):
 
                 break
 
-    return create_metrics(rewards, steps, successes, collisions, episodes), first_trajectory
+    return create_metrics(
+        rewards, steps, successes, collisions, episodes
+    ), first_trajectory
 
 
 def create_metrics(rewards, steps, successes, collisions, episodes):

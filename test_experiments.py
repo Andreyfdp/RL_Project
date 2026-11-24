@@ -1,4 +1,4 @@
-"""Regression tests for experimental validity, not navigation performance."""
+# Regression tests for experimental validity, not navigation performance.
 
 import copy
 import json
@@ -26,16 +26,16 @@ from train import (
 
 
 class ExperimentTests(unittest.TestCase):
-    """Check fair evaluation, delayed updates and independently saved artifacts."""
+    # Check fair evaluation, delayed updates and independently saved artifacts.
 
     @classmethod
     def setUpClass(cls):
-        """Keep CPU tests small and independent of the number of host cores."""
+        # Keep CPU tests small and independent of the number of host cores.
         torch.set_num_threads(1)
         cls.dataset = OfflineDataset(DATA_DIR / "small.npz")
 
     def test_evaluation_preserves_rng_and_is_repeatable(self):
-        """Evaluation must not change subsequent training batches or VAE draws."""
+        # Evaluation must not change subsequent training batches or VAE draws.
         set_seed(3)
         agent = make_agent("bcq")
         before = (
@@ -51,7 +51,7 @@ class ExperimentTests(unittest.TestCase):
         self.assertTrue(torch.equal(torch.get_rng_state(), before[2]))
 
     def test_bcq_phi_zero_and_checkpoint_phi(self):
-        """Phi=0 forbids perturbation; checkpoint loading must restore phi."""
+        # Phi=0 forbids perturbation; checkpoint loading must restore phi.
         agent = make_agent("bcq", phi=0)
         states, actions, *_ = self.dataset.sample(8)
         torch.testing.assert_close(agent.actor(states, actions), actions)
@@ -64,7 +64,7 @@ class ExperimentTests(unittest.TestCase):
             self.assertEqual(restored.actor_target.phi, 0)
 
     def test_td3_delayed_updates(self):
-        """TD3's actor and targets update every second critic step."""
+        # TD3's actor and targets update every second critic step.
         agent = make_agent("td3")
         actor = copy.deepcopy(agent.actor.state_dict())
         target = copy.deepcopy(agent.critic_target.state_dict())
@@ -84,7 +84,7 @@ class ExperimentTests(unittest.TestCase):
         )
 
     def test_td3_terminal_targets(self):
-        """True terminals remove bootstrap; nonterminal/timeouts retain it."""
+        # True terminals remove bootstrap; nonterminal/timeouts retain it.
         agent = make_agent("td3")
         # Constant online Q=0, target Q=2 makes the expected loss analytical.
         with torch.no_grad():
@@ -103,7 +103,7 @@ class ExperimentTests(unittest.TestCase):
         self.assertAlmostEqual(losses["critic_loss"], expected, places=5)
 
     def test_policy_q_uses_deployed_policy(self):
-        """Q diagnostics must score the same BCQ candidate selection as rollout."""
+        # Q diagnostics must score the same BCQ candidate selection as rollout.
         agent = make_agent("bcq")
         states = self.dataset.states[:4]
         with isolated_rng(5), torch.no_grad():
@@ -116,7 +116,7 @@ class ExperimentTests(unittest.TestCase):
         self.assertIsNone(policy_q(make_agent("bc"), states))
 
     def test_grid_and_seed_statistics(self):
-        """Ablation shares three main runs; uncertainty is across seeds."""
+        # Ablation shares three main runs; uncertainty is across seeds.
         self.assertEqual(len(experiment_grid("main", [0, 1, 2])), 36)
         self.assertEqual(len(experiment_grid("ablation", [0, 1, 2])), 18)
         self.assertEqual(len(experiment_grid("all", [0, 1, 2])), 51)
@@ -125,7 +125,7 @@ class ExperimentTests(unittest.TestCase):
         self.assertTrue(np.isnan(mean_std([1])[1]))
 
     def test_run_artifacts_and_report_protocol_guard(self):
-        """Runs remain distinct and reports reject mixed training budgets."""
+        # Runs remain distinct and reports reject mixed training budgets.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             args = build_parser().parse_args(
