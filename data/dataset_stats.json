@@ -1,0 +1,110 @@
+[
+    {
+        "mode": "easy",
+        "path": "/home/claude/repo/data/easy.npz",
+        "seed": 42,
+        "episodes": 1000,
+        "transitions": 38465,
+        "noise_std": 0.3,
+        "random_prob": 0.05,
+        "good_fraction": 1.0,
+        "start_noise": 0.3,
+        "success_rate": 0.801,
+        "collision_rate": 0.199,
+        "timeout_rate": 0.0,
+        "average_reward": 55.08852413641919,
+        "good_policy": {
+            "episodes": 1000,
+            "success": 801,
+            "collision": 199,
+            "timeout": 0
+        },
+        "bad_policy": {
+            "episodes": 0,
+            "success": 0,
+            "collision": 0,
+            "timeout": 0
+        }
+    },
+    {
+        "mode": "noisy",
+        "path": "/home/claude/repo/data/noisy.npz",
+        "seed": 42,
+        "episodes": 1000,
+        "transitions": 42031,
+        "noise_std": 0.6,
+        "random_prob": 0.25,
+        "good_fraction": 1.0,
+        "start_noise": 0.3,
+        "success_rate": 0.38,
+        "collision_rate": 0.62,
+        "timeout_rate": 0.0,
+        "average_reward": 33.87889197000219,
+        "good_policy": {
+            "episodes": 1000,
+            "success": 380,
+            "collision": 620,
+            "timeout": 0
+        },
+        "bad_policy": {
+            "episodes": 0,
+            "success": 0,
+            "collision": 0,
+            "timeout": 0
+        }
+    },
+    {
+        "mode": "mixed",
+        "path": "/home/claude/repo/data/mixed.npz",
+        "seed": 42,
+        "episodes": 1000,
+        "transitions": 24598,
+        "noise_std": 0.3,
+        "random_prob": 0.05,
+        "good_fraction": 0.4,
+        "start_noise": 0.3,
+        "success_rate": 0.355,
+        "collision_rate": 0.645,
+        "timeout_rate": 0.0,
+        "average_reward": 32.83222994011357,
+        "good_policy": {
+            "episodes": 415,
+            "success": 355,
+            "collision": 60,
+            "timeout": 0
+        },
+        "bad_policy": {
+            "episodes": 585,
+            "success": 0,
+            "collision": 585,
+            "timeout": 0
+        }
+    },
+    {
+        "mode": "small",
+        "path": "/home/claude/repo/data/small.npz",
+        "seed": 42,
+        "episodes": 100,
+        "transitions": 2446,
+        "noise_std": 0.3,
+        "random_prob": 0.05,
+        "good_fraction": 0.4,
+        "start_noise": 0.3,
+        "success_rate": 0.35,
+        "collision_rate": 0.65,
+        "timeout_rate": 0.0,
+        "average_reward": 32.78668550522922,
+        "good_policy": {
+            "episodes": 40,
+            "success": 35,
+            "collision": 5,
+            "timeout": 0
+        },
+        "bad_policy": {
+            "episodes": 60,
+            "success": 0,
+            "collision": 60,
+            "timeout": 0
+        }
+    }
+]

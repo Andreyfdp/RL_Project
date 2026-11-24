@@ -78,6 +78,28 @@ DATASET_EPISODES = 1000
 # Standard deviation of Gaussian noise in behavior policy.
 BEHAVIOR_NOISE_STD = 0.30
 
+# Probability of a completely random action in behavior policy.
+RANDOM_ACTION_PROB = 0.05
+
+# ------------------------------------------------------------
+# Experiment datasets (collect_dataset.py --mode ...)
+# ------------------------------------------------------------
+
+# Random shift of the start position (uniform in [-x, x] for both coordinates).
+START_NOISE = 0.30
+
+# Settings of every dataset mode.
+#   noise_std     - Gaussian noise added to actions
+#   random_prob   - chance of a completely random action
+#   good_fraction - share of episodes from the good (waypoint) policy,
+#                   all other episodes come from the bad (greedy) policy
+DATASET_MODES = {
+    "easy":  {"noise_std": 0.30, "random_prob": 0.05, "good_fraction": 1.0, "episodes": 1000},
+    "noisy": {"noise_std": 0.60, "random_prob": 0.25, "good_fraction": 1.0, "episodes": 1000},
+    "mixed": {"noise_std": 0.30, "random_prob": 0.05, "good_fraction": 0.4, "episodes": 1000},
+    "small": {"noise_std": 0.30, "random_prob": 0.05, "good_fraction": 0.4, "episodes": 100},
+}
+
 
 # ============================================================
 # BCQ TRAINING

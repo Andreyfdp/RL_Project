@@ -813,6 +813,37 @@ The final policy reaches the goal without collisions during the evaluation exper
 
 ---
 
+# Experiment Datasets
+
+For the experiments from the proposal (BC / offline TD3 / BCQ comparison, Φ ablation) we use four extra datasets.
+All of them use a random start shift of ±0.3, so evaluation episodes are not identical.
+
+```bash
+python collect_dataset.py --all     # data/easy.npz, noisy.npz, mixed.npz, small.npz + data/dataset_stats.json
+python check_datasets.py            # sanity checks
+python plot_datasets.py             # results/datasets_trajectories.png
+```
+
+| Dataset | Episodes | Transitions | Good policy | Success | Collision | Avg reward |
+|---|---:|---:|---:|---:|---:|---:|
+| easy | 1000 | 38465 | 100% | 80.1% | 19.9% | 55.09 |
+| noisy | 1000 | 42031 | 100% | 38.0% | 62.0% | 33.88 |
+| mixed | 1000 | 24598 | 40% | 35.5% | 64.5% | 32.83 |
+| small | 100 | 2446 | 40% | 35.0% | 65.0% | 32.79 |
+
+- **easy** — the original behavior policy (waypoints, noise 0.3, 5% random actions).
+- **noisy** — the same policy with noise 0.6 and 25% random actions.
+- **mixed** — 40% of episodes from the good waypoint policy, 60% from a *bad greedy* policy that drives straight to the goal and crashes into the obstacle. Near the start good and bad actions look similar, so simply copying the data (BC) averages them, while a Q-function can tell them apart.
+- **small** — `mixed` with only 100 episodes.
+
+In the new datasets `dones` marks only real terminal states (goal or collision). Episodes cut by the 120-step limit are stored in a separate `timeouts` array and must **not** be treated as terminal in the Bellman target. The arrays `episode_ids` and `policy_types` (0 = good, 1 = bad) are stored for plots and checks; `OfflineDataset` ignores them.
+
+<p align="center">
+  <img src="results/datasets_trajectories.png" width="100%" alt="Trajectories in the experiment datasets">
+</p>
+
+---
+
 # Repository Structure
 
 ```text

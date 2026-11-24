@@ -1,14 +1,35 @@
+"""Collecting offline datasets for the BCQ experiments.
+
+Examples:
+    python collect_dataset.py                    # old default dataset (data/offline_dataset.npz)
+    python collect_dataset.py --mode mixed       # one experiment dataset -> data/mixed.npz
+    python collect_dataset.py --all              # all four: easy, noisy, mixed, small
+"""
+
+import argparse
+import json
+
 import numpy as np
 
 from config import (
+    DATA_DIR,
     DATASET_PATH,
     DATASET_EPISODES,
+    DATASET_MODES,
     BEHAVIOR_NOISE_STD,
+    RANDOM_ACTION_PROB,
+    START_NOISE,
     SEED,
     create_project_dirs,
 )
 
 from env import NavigationEnv
+
+
+# Policy type labels, we are saving them in the dataset so later it is easy to see
+# which episode came from which policy (for plots and for sanity checks)
+GOOD_POLICY = 0
+BAD_POLICY = 1
 
 
 def get_route(rng):
@@ -27,12 +48,26 @@ def get_route(rng):
     ]
 
 
-def behavior_policy(position, waypoints, waypoint_index, rng):
-    # Move to the next waypoint
+def add_noise(direction, rng, noise_std, random_prob):
+    # Adding Gaussian noise to the clean direction, so the data is not perfect
+    noise = rng.normal(loc=0.0, scale=noise_std, size=2)
+    action = direction + noise
+
+    # And sometimes just throwing away everything and taking a fully random action
+    if rng.random() < random_prob:
+        action = rng.uniform(-1.0, 1.0, size=2)
+
+    return np.clip(action, -1.0, 1.0).astype(np.float32)
+
+
+def behavior_policy(position, waypoints, waypoint_index, rng,
+                    noise_std=BEHAVIOR_NOISE_STD, random_prob=RANDOM_ACTION_PROB):
+    # GOOD policy: going from waypoint to waypoint around the obstacle
     target = waypoints[waypoint_index]
 
     distance = np.linalg.norm(target - position)
 
+    # If we are already close to the current waypoint, switching to the next one
     if distance < 0.45 and waypoint_index < len(waypoints) - 1:
         waypoint_index += 1
         target = waypoints[waypoint_index]
@@ -45,134 +80,251 @@ def behavior_policy(position, waypoints, waypoint_index, rng):
     else:
         direction = np.zeros(2, dtype=np.float32)
 
-    # Add exploration noise
-    noise = rng.normal(
-        loc=0.0,
-        scale=BEHAVIOR_NOISE_STD,
-        size=2,
-    )
+    action = add_noise(direction, rng, noise_std, random_prob)
 
-    action = direction + noise
-
-    # Occasionally use a completely random action
-    if rng.random() < 0.05:
-        action = rng.uniform(-1.0, 1.0, size=2)
-
-    action = np.clip(
-        action,
-        -1.0,
-        1.0,
-    )
-
-    return action.astype(np.float32), waypoint_index
+    return action, waypoint_index
 
 
-def collect_dataset():
+def greedy_policy(position, goal, rng,
+                  noise_std=BEHAVIOR_NOISE_STD, random_prob=RANDOM_ACTION_PROB):
+    # BAD policy: just going straight to the goal and not caring about the obstacle at all.
+    # The straight line from start to goal is going right through the obstacle, so this
+    # policy is almost always crashing. The point is that near the start its actions are
+    # looking pretty similar to the good ones, so only the Q-function (not copying) can
+    # tell which actions are actually good
+    direction = goal - position
+    norm = np.linalg.norm(direction)
+
+    if norm > 1e-8:
+        direction = direction / norm
+    else:
+        direction = np.zeros(2, dtype=np.float32)
+
+    return add_noise(direction, rng, noise_std, random_prob)
+
+
+def collect_dataset(mode=None, episodes=None, out_path=None, seed=SEED,
+                    start_noise=None, verbose=True):
+    """Collecting one dataset and returning its statistics.
+
+    mode=None means the old default dataset (exactly like it was before: no start noise,
+    only the good policy), so data/offline_dataset.npz is staying reproducible.
+    """
     create_project_dirs()
 
-    rng = np.random.default_rng(SEED)
+    if mode is None:
+        settings = {
+            "noise_std": BEHAVIOR_NOISE_STD,
+            "random_prob": RANDOM_ACTION_PROB,
+            "good_fraction": 1.0,
+            "episodes": DATASET_EPISODES,
+        }
+        default_start_noise = 0.0
+        default_out = DATASET_PATH
+    else:
+        if mode not in DATASET_MODES:
+            raise ValueError(f"Unknown mode {mode!r}, choose from {list(DATASET_MODES)}")
+        settings = dict(DATASET_MODES[mode])
+        default_start_noise = START_NOISE
+        default_out = DATA_DIR / f"{mode}.npz"
 
-    env = NavigationEnv(seed=SEED)
+    episodes = settings["episodes"] if episodes is None else episodes
+    start_noise = default_start_noise if start_noise is None else start_noise
+    out_path = default_out if out_path is None else out_path
 
-    states = []
-    actions = []
-    rewards = []
-    next_states = []
-    dones = []
+    noise_std = settings["noise_std"]
+    random_prob = settings["random_prob"]
+    good_fraction = settings["good_fraction"]
 
-    successful_episodes = 0
-    collision_episodes = 0
-    timeout_episodes = 0
+    # One generator for the policies, and the env has its own one for the start noise
+    rng = np.random.default_rng(seed)
+    env = NavigationEnv(seed=seed, start_noise=start_noise)
 
-    total_reward = 0.0
+    states, actions, rewards, next_states, dones = [], [], [], [], []
+    timeouts, episode_ids, policy_types = [], [], []
 
-    for episode in range(DATASET_EPISODES):
+    # Counting outcomes separately for good and bad episodes, so we can see what is inside
+    outcomes = {
+        GOOD_POLICY: {"episodes": 0, "success": 0, "collision": 0, "timeout": 0},
+        BAD_POLICY: {"episodes": 0, "success": 0, "collision": 0, "timeout": 0},
+    }
+    episode_rewards = []
+
+    for episode in range(episodes):
         state = env.reset()
 
-        waypoints = get_route(rng)
-        waypoint_index = 0
+        # Choosing which policy is playing this episode. When everything is good policy we
+        # are not touching rng here at all, so the old dataset stays exactly the same
+        if good_fraction < 1.0 and rng.random() >= good_fraction:
+            policy_type = BAD_POLICY
+        else:
+            policy_type = GOOD_POLICY
+
+        if policy_type == GOOD_POLICY:
+            waypoints = get_route(rng)
+            waypoint_index = 0
 
         episode_reward = 0.0
 
         while True:
-            action, waypoint_index = behavior_policy(
-                position=env.position.copy(),
-                waypoints=waypoints,
-                waypoint_index=waypoint_index,
-                rng=rng,
-            )
+            if policy_type == GOOD_POLICY:
+                action, waypoint_index = behavior_policy(
+                    position=env.position.copy(),
+                    waypoints=waypoints,
+                    waypoint_index=waypoint_index,
+                    rng=rng,
+                    noise_std=noise_std,
+                    random_prob=random_prob,
+                )
+            else:
+                action = greedy_policy(
+                    position=env.position.copy(),
+                    goal=env.goal_position,
+                    rng=rng,
+                    noise_std=noise_std,
+                    random_prob=random_prob,
+                )
 
             next_state, reward, done, info = env.step(action)
+
+            # Important thing: "done" in the dataset means only REAL ends of the episode
+            # (goal or crash). If we just ran out of steps, the episode is cut, but the
+            # state is not terminal, so the Q-target should still look into the future.
+            # That's why timeouts are saved in a separate array
+            terminal = info["success"] or info["collision"]
+            timeout = done and not terminal
 
             states.append(state)
             actions.append(action)
             rewards.append(reward)
             next_states.append(next_state)
-            dones.append(float(done))
+            dones.append(float(terminal))
+            timeouts.append(float(timeout))
+            episode_ids.append(episode)
+            policy_types.append(policy_type)
 
             state = next_state
             episode_reward += reward
 
             if done:
+                stats = outcomes[policy_type]
+                stats["episodes"] += 1
                 if info["success"]:
-                    successful_episodes += 1
-
+                    stats["success"] += 1
                 elif info["collision"]:
-                    collision_episodes += 1
-
+                    stats["collision"] += 1
                 else:
-                    timeout_episodes += 1
-
+                    stats["timeout"] += 1
                 break
 
-        total_reward += episode_reward
-
-        if (episode + 1) % 100 == 0:
-            print(
-                f"Episode {episode + 1}/{DATASET_EPISODES} | "
-                f"Transitions: {len(states)} | "
-                f"Success: {successful_episodes} | "
-                f"Collision: {collision_episodes} | "
-                f"Timeout: {timeout_episodes}"
-            )
-
-    states = np.asarray(states, dtype=np.float32)
-    actions = np.asarray(actions, dtype=np.float32)
-    rewards = np.asarray(rewards, dtype=np.float32).reshape(-1, 1)
-    next_states = np.asarray(next_states, dtype=np.float32)
-    dones = np.asarray(dones, dtype=np.float32).reshape(-1, 1)
+        episode_rewards.append(episode_reward)
 
     np.savez_compressed(
-        DATASET_PATH,
-        states=states,
-        actions=actions,
-        rewards=rewards,
-        next_states=next_states,
-        dones=dones,
+        out_path,
+        states=np.asarray(states, dtype=np.float32),
+        actions=np.asarray(actions, dtype=np.float32),
+        rewards=np.asarray(rewards, dtype=np.float32).reshape(-1, 1),
+        next_states=np.asarray(next_states, dtype=np.float32),
+        dones=np.asarray(dones, dtype=np.float32).reshape(-1, 1),
+        # Extra arrays, OfflineDataset is just ignoring them, they are for plots and checks
+        timeouts=np.asarray(timeouts, dtype=np.float32).reshape(-1, 1),
+        episode_ids=np.asarray(episode_ids, dtype=np.int32),
+        policy_types=np.asarray(policy_types, dtype=np.int8),
     )
 
-    print()
-    print("Dataset collection finished.")
-    print(f"Saved to: {DATASET_PATH}")
-    print(f"Transitions: {len(states)}")
-    print(f"States shape: {states.shape}")
-    print(f"Actions shape: {actions.shape}")
-    print(f"Rewards shape: {rewards.shape}")
-    print(f"Next states shape: {next_states.shape}")
-    print(f"Dones shape: {dones.shape}")
-    print()
-    print(f"Successful episodes: {successful_episodes}")
-    print(f"Collision episodes: {collision_episodes}")
-    print(f"Timeout episodes: {timeout_episodes}")
+    # Putting together the summary for this dataset
+    total = {
+        key: outcomes[GOOD_POLICY][key] + outcomes[BAD_POLICY][key]
+        for key in outcomes[GOOD_POLICY]
+    }
+    summary = {
+        "mode": mode or "default",
+        "path": str(out_path),
+        "seed": seed,
+        "episodes": episodes,
+        "transitions": len(states),
+        "noise_std": noise_std,
+        "random_prob": random_prob,
+        "good_fraction": good_fraction,
+        "start_noise": start_noise,
+        "success_rate": total["success"] / episodes,
+        "collision_rate": total["collision"] / episodes,
+        "timeout_rate": total["timeout"] / episodes,
+        "average_reward": float(np.mean(episode_rewards)),
+        "good_policy": outcomes[GOOD_POLICY],
+        "bad_policy": outcomes[BAD_POLICY],
+    }
+
+    if verbose:
+        print_summary(summary)
+
+    return summary
+
+
+def print_summary(s):
+    print(f"[{s['mode']}] -> {s['path']}")
+    print(f"  episodes: {s['episodes']}  transitions: {s['transitions']}")
     print(
-        f"Success rate: "
-        f"{successful_episodes / DATASET_EPISODES * 100:.2f}%"
+        f"  success: {s['success_rate'] * 100:5.1f}%  "
+        f"collision: {s['collision_rate'] * 100:5.1f}%  "
+        f"timeout: {s['timeout_rate'] * 100:5.1f}%  "
+        f"avg reward: {s['average_reward']:.2f}"
     )
-    print(
-        f"Average reward: "
-        f"{total_reward / DATASET_EPISODES:.3f}"
-    )
+    for name in ("good_policy", "bad_policy"):
+        p = s[name]
+        if p["episodes"]:
+            print(
+                f"  {name:11s}: {p['episodes']:4d} ep | success {p['success']:4d} | "
+                f"collision {p['collision']:4d} | timeout {p['timeout']:4d}"
+            )
+    print()
+
+
+def print_table(summaries):
+    # Making a small markdown table, it is easy to paste straight into README or slides
+    print("| Dataset | Episodes | Transitions | Good policy | Success | Collision | Timeout | Avg reward |")
+    print("|---|---:|---:|---:|---:|---:|---:|---:|")
+    for s in summaries:
+        print(
+            f"| {s['mode']} | {s['episodes']} | {s['transitions']} | "
+            f"{s['good_fraction'] * 100:.0f}% | {s['success_rate'] * 100:.1f}% | "
+            f"{s['collision_rate'] * 100:.1f}% | {s['timeout_rate'] * 100:.1f}% | "
+            f"{s['average_reward']:.2f} |"
+        )
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Collecting offline datasets for BCQ.")
+    parser.add_argument("--mode", choices=list(DATASET_MODES), default=None,
+                        help="Dataset type. Without it the old default dataset is created.")
+    parser.add_argument("--all", action="store_true", help="Collect all dataset modes.")
+    parser.add_argument("--episodes", type=int, default=None, help="Override number of episodes.")
+    parser.add_argument("--out", type=str, default=None, help="Output .npz path.")
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--start-noise", type=float, default=None,
+                        help="Random start shift (default: 0.3 for modes, 0 for the old dataset).")
+    args = parser.parse_args()
+
+    if args.all:
+        if args.mode or args.out:
+            parser.error("--all can't be used together with --mode or --out")
+
+        summaries = [
+            collect_dataset(mode=mode, episodes=args.episodes, seed=args.seed,
+                            start_noise=args.start_noise)
+            for mode in DATASET_MODES
+        ]
+
+        stats_path = DATA_DIR / "dataset_stats.json"
+        with open(stats_path, "w") as f:
+            json.dump(summaries, f, indent=4)
+
+        print_table(summaries)
+        print(f"\nStatistics saved to: {stats_path}")
+    else:
+        collect_dataset(mode=args.mode, episodes=args.episodes, out_path=args.out,
+                        seed=args.seed, start_noise=args.start_noise)
 
 
 if __name__ == "__main__":
-    collect_dataset()
+    main()

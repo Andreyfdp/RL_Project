@@ -26,8 +26,17 @@ class NavigationEnv:
     dataset creation and the existing training code easy to run as scripts.
     """
 
-    def __init__(self, seed=SEED, start_position=None, goal_position=None):
+    def __init__(self, seed=SEED, start_position=None, goal_position=None, start_noise=0.0):
         self.rng = np.random.default_rng(seed)
+
+        # Here we are keeping the start noise: if it is bigger than zero, then on every
+        # reset the agent is starting not exactly at the start point, but somewhere in a
+        # small square around it, so basically episodes are not all the same anymore.
+        # By default it is zero, so all the old scripts and the old checkpoint are working
+        # exactly like before
+        if start_noise < 0:
+            raise ValueError(f"start_noise must be >= 0, got {start_noise}")
+        self.start_noise = float(start_noise)
 
         self.start_position = self._as_valid_position(
             START_POSITION if start_position is None else start_position,
@@ -82,11 +91,28 @@ class NavigationEnv:
         if start_position is not None:
             self.set_task(start_position, goal_position)
 
-        self.position = self.start_position.copy()
+        self.position = self._sample_start()
         self.steps = 0
         self.done = False
 
         return self._get_state()
+
+    def _sample_start(self):
+        # Without noise we are just returning the usual fixed start, nothing special here
+        if self.start_noise == 0.0:
+            return self.start_position.copy()
+
+        # Otherwise taking random shifts in [-noise, noise] for x and y and checking that the
+        # agent is not starting inside a wall or an obstacle (if it is, we are simply trying again)
+        for _ in range(100):
+            shift = self.rng.uniform(-self.start_noise, self.start_noise, size=2)
+            candidate = (self.start_position + shift).astype(np.float32)
+
+            if not self._is_collision(candidate):
+                return candidate
+
+        # Practically never happening, but just in case falling back to the normal start
+        return self.start_position.copy()
 
     def _get_state(self):
         goal_delta = self.goal_position - self.position
