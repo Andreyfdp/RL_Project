@@ -1,4 +1,4 @@
-# Build and optionally execute the presentation notebook with real outputs.
+# Build and optionally execute the BCQ notebook.
 
 import argparse
 import textwrap
@@ -23,18 +23,17 @@ def build_notebook():
 
     markdown(
         r"""
-        # Offline navigation: BC, TD3 and BCQ
+        # Batch-Constrained Q-Learning for offline 2D navigation
 
-        This notebook follows one real transition from `data/mixed.npz` through a BCQ update.
-        The saved outputs were computed on CPU.
+        A single transition from the mixed dataset illustrates how BCQ builds a
+        Bellman target and updates the critics and the policy.
         """
     )
     markdown(
         r"""
-        ## 1. Google Colab setup
+        ## 1. Setup
 
-        Run the next cell in Colab to clone the project and install dependencies.
-        For local execution, start Jupyter in the project directory.
+        Run locally from the project directory. In Colab, the setup cell clones the repository and installs its dependencies.
         """
     )
     code("""
@@ -73,11 +72,12 @@ def build_notebook():
     """)
     markdown(
         r"""
-        ## 2. One real transition
+        ## 2. One dataset transition
 
         The state is `[x, y, goal_x - x, goal_y - y]`.
-        `done` marks a goal or collision. Time limits are stored separately in `timeouts`
-        and keep the Bellman bootstrap. This example updates one transition; training uses batch=256.
+        A goal or collision sets `done` to 1. A time limit is recorded separately,
+        so the target still bootstraps at a timeout. The example uses a fresh agent and
+        one transition. Benchmark training samples 256 transitions per update.
         """
     )
     code("""
@@ -95,11 +95,19 @@ def build_notebook():
     """)
     markdown(
         r"""
-        ## 3. VAE: encode, sample, decode and update
+        ## 3. Conditional VAE
 
-        $z=\mu+\sigma\epsilon$, $L_{VAE}=MSE(\hat a,a)+0.5 KL$.
-        Use the same $\epsilon$ and latent probe before and after the update to isolate
-        parameter changes from sampling noise.
+        $$
+        z = \mu + \sigma \odot \epsilon,
+        \qquad
+        L_{\mathrm{VAE}} =
+        \mathrm{MSE}\!\left(\hat{a}, a\right)
+        + 0.5\,\overline{D}_{\mathrm{KL}}\!\left(q(z\mid s,a)\,\|\,\mathcal{N}(0,I)\right).
+        $$
+
+        The KL term is averaged over latent dimensions. The reconstruction uses the
+        same noise sample before and after the optimizer step.
+        A second, fixed latent vector shows how the decoder's candidate changes.
         """
     )
     code("""
@@ -130,10 +138,18 @@ def build_notebook():
     """)
     markdown(
         r"""
-        ## 4. Perturbation and twin Q estimates
+        ## 4. Perturbation and critic scores
 
-        $\tilde a=clip(a_{VAE}+\Phi\tanh(\xi(s,a_{VAE})), -1,1)$.
-        Each action correction is bounded by Phi=0.05. Both critics then score the action.
+        $$
+        \tilde{a} =
+        \mathrm{clip}\!\left(
+        a_{\mathrm{VAE}} + \Phi\,\tanh\!\left(\xi(s,a_{\mathrm{VAE}})\right),
+        -1, 1
+        \right).
+        $$
+
+        With $\Phi = 0.05$, the actor can change each action component by at most 0.05.
+        Both critics score the perturbed action.
         """
     )
     code("""
@@ -147,11 +163,21 @@ def build_notebook():
     """)
     markdown(
         r"""
-        ## 5. Target y from ten next-state candidates
+        ## 5. Bellman target
 
-        $Q_{mix}=0.75\min(Q_1',Q_2')+0.25\max(Q_1',Q_2')$,
-        $y=r+\gamma(1-done)\max_i Q_{mix}(s',a_i')$.
-        Compute the target without gradients after the VAE update, as in `BCQ.train`.
+        BCQ samples ten candidates at the next state. For each candidate,
+        $Q'_1$ and $Q'_2$ are the scores from the target critics.
+
+        $$
+        Q_{\mathrm{mix}} = 0.75\,\min(Q'_1,Q'_2) + 0.25\,\max(Q'_1,Q'_2).
+        $$
+
+        $$
+        y = r + \gamma(1-\mathrm{done})\max_i Q_{\mathrm{mix}}(s',a'_i).
+        $$
+
+        Candidate 1 has the highest mixed score in this example. The transition
+        is nonterminal, so its score contributes to the target.
         """
     )
     code("""
@@ -171,10 +197,13 @@ def build_notebook():
     """)
     markdown(
         r"""
-        ## 6. Critic update: before and after
+        ## 6. Critic update
 
-        Minimize $(Q_1(s,a)-y)^2+(Q_2(s,a)-y)^2$ on the **dataset action**.
-        Compare both critics against the same fixed target after the update.
+        The critics use the action stored in the dataset and share a fixed target.
+
+        $$
+        L_Q = \left(Q_1(s,a)-y\right)^2 + \left(Q_2(s,a)-y\right)^2.
+        $$
         """
     )
     code("""
@@ -192,14 +221,22 @@ def build_notebook():
     print("Q1, Q2 before:", q_before)
     print("Q1, Q2 after: ", q_after)
     print("Critic loss before / after:", critic_loss.item(), critic_loss_after.item())
+    print("Absolute errors before:", np.abs(np.array(q_before) - target_y.item()).round(5))
+    print("Absolute errors after: ", np.abs(np.array(q_after) - target_y.item()).round(5))
+    terminal_target = rewards + (1 - torch.ones_like(dones)) * agent.gamma * best_q
+    print("Target with done = 1:", round(terminal_target.item(), 5))
     """)
     markdown(
         r"""
-        ## 7. Actor and target updates: before and after
+        ## 7. Actor and target networks
 
-        $L_{actor}=-Q_1(s,\xi(s,a_{VAE}))$. Detach the VAE candidate from its computation graph.
-        Compare the same candidate before and after the actor step using the updated critic.
-        One Adam step does not guarantee that every individual Q estimate improves.
+        $$
+        L_{\mathrm{actor}} = -Q_1(s,\tilde{a}).
+        $$
+
+        The actor uses a fixed VAE candidate. The same critic scores the action
+        before and after the actor step. BCQ then moves the target actor and critic
+        0.5% of the way toward the updated networks.
         """
     )
     code("""
@@ -237,11 +274,11 @@ def build_notebook():
         r"""
         ## 8. Benchmark results
 
-        The benchmark runs BC, offline TD3 and BCQ on four datasets with training seeds 0–2,
-        plus six BCQ perturbation limits on the mixed dataset. Each run uses 2,000 updates.
-        The checkpoint with the highest validation success rate is selected, using mean reward
-        to break ties. Each selected policy is tested on 100 episodes per task distribution.
-        Tables report the mean and sample standard deviation across training seeds.
+        BC, offline TD3 and BCQ each train for 2,000 updates on four datasets
+        with seeds 0, 1 and 2. The mixed dataset also has a six-setting sweep of
+        the perturbation limit. We select checkpoints by validation success rate
+        and break ties with mean reward. Each selected policy runs on 100 test episodes
+        per task distribution. The tables give means and sample standard deviations across seeds.
         """
     )
     code("""
@@ -256,12 +293,22 @@ def build_notebook():
     """)
     markdown(
         r"""
-        ## Interpretation
+        ## Conclusions
 
-        Increasing Q alone does not establish policy improvement. Check success, collisions
-        and measured discounted return. Returns stop at the 120-step horizon, while dataset
-        timeouts retain Bellman bootstrapping. This can also cause Q/return differences.
-        Generalization uses new start/goal pairs near the original regions, not new maps.
+        On the example transition, one optimizer step reduced the critic loss from
+        4.38727 to 0.51737. Both predictions moved closer to the target of 0.96213,
+        and Q1 crossed it. With the terminal flag set to 1, the target is the
+        immediate reward of 1.62687.
+
+        With noisy training data and the original goal, BCQ and behavior cloning
+        succeeded in 100% and 99.7% of test episodes, respectively, averaged across
+        seeds. BCQ took 41.6 steps per episode on average, compared with 66.2 for
+        behavior cloning. On nearby new starts and goals, success fell to 47.0%
+        for BCQ and 68.3% for behavior cloning. On mixed data with the original goal,
+        the default BCQ policy reached 10.0%, compared with 25.7% for behavior cloning.
+
+        On mixed data, the 33.3% mean at $\Phi = 0.25$ came from one seed at 100%
+        and two seeds at 0%. Offline TD3 reached no goals at the 2,000-update budget.
         """
     )
     return nbf.v4.new_notebook(
@@ -280,7 +327,7 @@ def build_notebook():
 def main():
     # Write the notebook, optionally execute every cell and retain its outputs.
     parser = argparse.ArgumentParser(
-        description="Build and optionally execute the presentation notebook with real outputs."
+        description="Build and optionally execute the BCQ notebook."
     )
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()

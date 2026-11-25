@@ -133,11 +133,13 @@ Repeated seeds count once, using the latest completed run. Incompatible budgets,
 evaluation protocols or dataset contents cannot be mixed. Use `--steps`,
 `--runs-dir` and `--output-dir` to select a separate series.
 
-## Notebook
+## Notebook and presentation
 
-`BCQ_Offline_Navigation_Demo.ipynb` includes Colab setup with `git clone`, a real
-transition walkthrough, VAE/actor/critic values before and after updates,
-and benchmark tables and plots. Outputs are saved.
+[Notebook](BCQ_Offline_Navigation_Demo.ipynb) with one BCQ update on a dataset
+transition and the benchmark results.
+
+[Presentation](presentation/BCQ_Offline_Navigation.pdf) on the environment,
+offline training, and evaluation.
 
 ```bash
 python build_notebook.py --execute
