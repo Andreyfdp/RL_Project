@@ -1,2 +1,0 @@
-dataset,algo,phi,n_seeds,success_rate_mean,success_rate_std,collision_rate_mean,collision_rate_std,average_reward_mean,average_reward_std,average_steps_mean,average_steps_std,discounted_return_mean,discounted_return_std
-mixed,bcq,0.05,1,0.3333333333333333,nan,0.6666666666666666,nan,30.846778514107065,nan,22.233333333333334,nan,26.523077302975313,nan
