@@ -7,6 +7,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 CHECKPOINT_DIR = BASE_DIR / "checkpoints"
 RESULTS_DIR = BASE_DIR / "results"
+EXPERIMENT_DIR = RESULTS_DIR / "experiments"
 
 DATASET_PATH = DATA_DIR / "offline_dataset.npz"
 MODEL_PATH = CHECKPOINT_DIR / "bcq_final.pt"

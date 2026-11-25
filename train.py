@@ -1,7 +1,6 @@
 # Reproducible offline experiments: BC, TD3, BCQ and held-out tasks.
 
 import argparse
-import hashlib
 import json
 import random
 import time
@@ -18,23 +17,26 @@ from config import (
     BATCH_SIZE,
     CHECKPOINT_DIR,
     DATASET_PATH,
+    EXPERIMENT_DIR,
     GAMMA,
     LEARNING_RATE,
     MAX_EPISODE_STEPS,
     NUM_ACTION_SAMPLES,
     PHI,
-    RESULTS_DIR,
     SEED,
     START_NOISE,
     TAU,
     TRAINING_STEPS,
 )
-from dataset import OfflineDataset
+from dataset import OfflineDataset, dataset_digest
 from env import NavigationEnv
 
 EVAL_INTERVAL = 5_000
 EVAL_EPISODES = 30
 EVAL_SEED = 10_000
+TEST_EPISODES = 100
+TEST_SEED = 30_000
+GENERALIZATION_SEED = 40_000
 PROBE_SEED = 20_000
 
 
@@ -177,6 +179,7 @@ def train(args=None):
         "batch_size",
         "eval_interval",
         "eval_episodes",
+        "test_episodes",
         "probe_size",
         "threads",
     ):
@@ -202,14 +205,22 @@ def train(args=None):
     run_path = reserve_run(Path(args.results_dir), name)
     checkpoint_dir = Path(args.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint = checkpoint_dir / f"{run_path.stem}_final.pt"
+    checkpoint = checkpoint_dir / f"{run_path.stem}_best.pt"
+    project_dir = Path(__file__).resolve().parent
+    dataset_location = (
+        dataset_path.relative_to(project_dir) if dataset_path.is_relative_to(project_dir)
+        else dataset_path
+    )
+    checkpoint_location = checkpoint.resolve()
+    if checkpoint_location.is_relative_to(project_dir):
+        checkpoint_location = checkpoint_location.relative_to(project_dir)
     run = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "running",
         "algo": args.algo,
         "dataset": dataset_path.stem,
-        "dataset_path": str(dataset_path),
-        "dataset_sha256": hashlib.sha256(dataset_path.read_bytes()).hexdigest(),
+        "dataset_path": dataset_location.as_posix(),
+        "dataset_sha256": dataset_digest(dataset_path),
         "dataset_size": len(dataset),
         "seed": args.seed,
         "phi": args.phi if args.algo == "bcq" else None,
@@ -239,20 +250,24 @@ def train(args=None):
             "interval": args.eval_interval,
             "episodes": args.eval_episodes,
             "seed": EVAL_SEED,
+            "selection": "success_rate_then_average_reward",
+            "test_episodes": args.test_episodes,
+            "test_seed": TEST_SEED,
             "start_noise": START_NOISE,
-            "generalization_seed": EVAL_SEED + 1,
+            "generalization_seed": GENERALIZATION_SEED,
             "return_horizon": MAX_EPISODE_STEPS,
             "q_definition": "Q1(s, policy(s))",
         },
         "probe_indices": indices.tolist(),
         "probe_seed": PROBE_SEED,
-        "checkpoint": str(checkpoint.resolve()),
+        "checkpoint": checkpoint_location.as_posix(),
         "history": [],
         "loss_history": [],
     }
     write_json(run_path, run)
     started = time.perf_counter()
     recent = {}
+    best_score = (-float("inf"), -float("inf"))
     try:
         for step in range(1, args.steps + 1):
             losses = agent.train(dataset.sample(args.batch_size))
@@ -278,6 +293,11 @@ def train(args=None):
                     metrics["q_dataset"] = policy_q(agent, probe)
                 metrics["step"] = step
                 run["history"].append(metrics)
+                score = (metrics["success_rate"], metrics["average_reward"])
+                if score > best_score:
+                    agent.save(checkpoint)
+                    best_score = score
+                    run["selected_step"] = step
                 write_json(run_path, run)
                 print(
                     f"{run_path.stem} | {step}/{args.steps} | "
@@ -288,10 +308,10 @@ def train(args=None):
                     f"Q={metrics['q_dataset']} G0={metrics['discounted_return']:.3f}",
                     flush=True,
                 )
-        agent.save(checkpoint)
-        run["final"] = evaluate(agent, args.eval_episodes)
+        agent.load(checkpoint)
+        run["final"] = evaluate(agent, args.test_episodes, seed=TEST_SEED)
         run["generalization"] = evaluate(
-            agent, args.eval_episodes, seed=EVAL_SEED + 1, generalization=True
+            agent, args.test_episodes, seed=GENERALIZATION_SEED, generalization=True
         )
         run["status"] = "completed"
     except Exception as error:
@@ -317,10 +337,11 @@ def build_parser():
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--eval-interval", type=int, default=EVAL_INTERVAL)
     parser.add_argument("--eval-episodes", type=int, default=EVAL_EPISODES)
+    parser.add_argument("--test-episodes", type=int, default=TEST_EPISODES)
     parser.add_argument("--probe-size", type=int, default=256)
     parser.add_argument("--device", choices=("cpu", "cuda"))
     parser.add_argument("--threads", type=int, default=1)
-    parser.add_argument("--results-dir", type=Path, default=RESULTS_DIR / "runs")
+    parser.add_argument("--results-dir", type=Path, default=EXPERIMENT_DIR / "runs")
     parser.add_argument("--checkpoint-dir", type=Path, default=CHECKPOINT_DIR / "runs")
     return parser
 

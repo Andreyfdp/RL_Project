@@ -26,7 +26,7 @@ def build_notebook():
         # Offline navigation: BC, TD3 and BCQ
 
         This notebook follows one real transition from `data/mixed.npz` through a BCQ update.
-        Saved outputs were computed on CPU. Short demo runs are smoke tests, not final results.
+        The saved outputs were computed on CPU.
         """
     )
     markdown(
@@ -34,18 +34,17 @@ def build_notebook():
         ## 1. Google Colab setup
 
         Run the next cell in Colab to clone the project and install dependencies.
-        Locally, it prints the working directory. Select Runtime > Change runtime type > GPU
-        for GPU training. Cloning includes local changes only after they are published.
+        For local execution, start Jupyter in the project directory.
         """
     )
     code("""
-    import importlib.util
+    from importlib.util import find_spec
     import os
     from pathlib import Path
     import subprocess
     import sys
 
-    if importlib.util.find_spec("google.colab") is not None:
+    if find_spec("google") is not None and find_spec("google.colab") is not None:
         project = Path("/content/RL_Project")
         if not project.exists():
             subprocess.run([
@@ -53,23 +52,18 @@ def build_notebook():
             ], check=True)
         os.chdir(project)
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"], check=True)
-    print("Project:", Path.cwd())
     """)
     code("""
     %matplotlib inline
-    import json
     import matplotlib.pyplot as plt
     import numpy as np
     import torch
     import torch.nn.functional as F
-    from IPython.display import HTML, Image, Markdown, display
-    from matplotlib.animation import FuncAnimation
-    from matplotlib.patches import Rectangle
+    from IPython.display import Image, Markdown, display
 
     from bcq import BCQ
-    from config import MODEL_PATH, OBSTACLES, RESULTS_DIR
     from dataset import OfflineDataset
-    from train import build_parser, evaluate, isolated_rng, make_agent, set_seed, train
+    from train import set_seed
 
     torch.set_num_threads(1)
     set_seed(0)
@@ -241,108 +235,24 @@ def build_notebook():
     """)
     markdown(
         r"""
-        ## 8. Short training example
+        ## 8. Benchmark results
 
-        The next cell runs 100 BC updates on mixed data to check the training interface.
-        Its artifacts are separate from the main experiment. Run the full suite with:
-
-        ```bash
-        python run_experiments.py --suite all --steps 100000
-        python make_report.py
-        ```
-
-        There are 36 main runs and 15 additional ablation runs. Mixed-data BCQ at Phi=0.05
-        is shared by both suites. Each run also evaluates new start/goal pairs.
+        The benchmark runs BC, offline TD3 and BCQ on four datasets with training seeds 0–2,
+        plus six BCQ perturbation limits on the mixed dataset. Each run uses 2,000 updates.
+        The checkpoint with the highest validation success rate is selected, using mean reward
+        to break ties. Each selected policy is tested on 100 episodes per task distribution.
+        Tables report the mean and sample standard deviation across training seeds.
         """
     )
     code("""
-    args = build_parser().parse_args([
-        "--algo", "bc", "--dataset", "data/mixed.npz", "--seed", "0", "--steps", "100",
-        "--eval-episodes", "2", "--probe-size", "32",
-        "--results-dir", "results/notebook/runs", "--checkpoint-dir", "results/notebook/checkpoints"
-    ])
-    demo_run_path = train(args)
-    demo_run = json.loads(demo_run_path.read_text(encoding="utf-8"))
-    print("Saved:", demo_run_path)
-    print(json.dumps(demo_run["history"][-1], indent=2))
-    print("BC has no critic: q_dataset and q_start are null.")
-    """)
-    markdown(
-        r"""
-        ## 9. Experiment tables and plots
+    report = Path("results/benchmark/report")
+    if not (report / "results_table.md").is_file():
+        raise FileNotFoundError("Run the benchmark and build its report using the README commands.")
 
-        Show the main report when available; otherwise label the smoke-test report explicitly.
-        Mean and standard deviation are computed across training seeds, not episodes.
-        Dataset Q and start-state return use different state distributions.
-        Compare `Q(start)` directly with the measured `G0`.
-        """
-    )
-    code("""
-    from make_report import make_report
-
-    main_runs = Path("results/runs")
-    smoke_runs = Path("results/smoke_suite/runs")
-    completed = lambda directory: any(
-        json.loads(p.read_text(encoding="utf-8")).get("status") == "completed"
-        for p in directory.glob("*.json")
-    ) if directory.exists() else False
-    if completed(main_runs):
-        report_dir = make_report(main_runs, Path("results/report"))
-        print("Main experiment report")
-    elif completed(smoke_runs):
-        report_dir = make_report(smoke_runs, Path("results/smoke_suite/report"))
-        print("SMOKE TEST ONLY: 100 training steps, 2 evaluation episodes; not a scientific result")
-    else:
-        report_dir = None
-        print("Run run_experiments.py to obtain result tables and learning curves.")
-    if report_dir is not None:
-        display(Markdown((report_dir / "results_table.md").read_text(encoding="utf-8")))
-        display(Markdown((report_dir / "generalization_table.md").read_text(encoding="utf-8")))
-        for name in ("success_curves.png", "q_curves.png", "phi_ablation.png", "trajectories.png"):
-            path = report_dir / name
-            if path.exists():
-                display(Image(filename=str(path)))
-    """)
-    markdown(
-        r"""
-        ## 10. Saved BCQ policy animation
-
-        Use the historical checkpoint to illustrate navigation. It is excluded from the new
-        BC/TD3/BCQ comparison. If it is missing, train a short demo model and label it explicitly.
-        """
-    )
-    code("""
-    from demo import rollout
-
-    visual_agent = make_agent("bcq", device="cpu")
-    if MODEL_PATH.exists():
-        visual_agent.load(MODEL_PATH)
-        print("Historical demonstration checkpoint:", MODEL_PATH)
-    else:
-        print("No historical checkpoint; training 100 demonstration updates")
-        for _ in range(100):
-            visual_agent.train(dataset.sample(256))
-    positions, total_reward, info = rollout(visual_agent, seed=4042)
-    print("Reward:", round(total_reward, 3), "Success:", info["success"], "Collision:", info["collision"])
-
-    fig, ax = plt.subplots(figsize=(5, 5))
-    for x0, y0, x1, y1 in OBSTACLES:
-        ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, color="gray", alpha=0.6))
-    ax.scatter(9, 9, marker="*", s=180, color="gold", edgecolor="black")
-    ax.set(xlim=(0, 10), ylim=(0, 10), aspect="equal", title="BCQ demonstration")
-    line, = ax.plot([], [], color="tab:blue")
-    marker, = ax.plot([], [], "o", color="tab:red")
-
-    def update(frame):
-        # Draw the current trajectory.
-        line.set_data(positions[:frame + 1, 0], positions[:frame + 1, 1])
-        marker.set_data([positions[frame, 0]], [positions[frame, 1]])
-        return line, marker
-
-    animation = FuncAnimation(fig, update, frames=len(positions), interval=100, blit=True)
-    html = animation.to_jshtml()
-    plt.close(fig)
-    display(HTML(html))
+    for filename in ("results_table.md", "generalization_table.md", "phi_table.md"):
+        display(Markdown((report / filename).read_text(encoding="utf-8")))
+    for filename in ("success_curves.png", "q_curves.png", "phi_ablation.png", "trajectories.png"):
+        display(Image(filename=str(report / filename)))
     """)
     markdown(
         r"""

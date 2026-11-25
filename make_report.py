@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Rectangle
 
-from config import MAP_HEIGHT, MAP_WIDTH, OBSTACLES, PHI, RESULTS_DIR
+from config import EXPERIMENT_DIR, MAP_HEIGHT, MAP_WIDTH, OBSTACLES, PHI
 
 METRICS = (
     "success_rate",
@@ -203,7 +203,7 @@ def make_report(directory, output, steps=None):
                     )
             ax.set(
                 title=dataset,
-                xlabel="Training steps",
+                xlabel="Training steps (validation checkpoints)",
                 ylabel="Success rate" if kind == "success" else "Q / discounted return",
             )
             if kind == "success":
@@ -230,7 +230,7 @@ def make_report(directory, output, steps=None):
         )
         ax.set(
             xlabel="Phi",
-            ylabel="Final success rate",
+            ylabel="Test success rate",
             title="BCQ on mixed data",
             ylim=(-0.05, 1.05),
         )
@@ -259,11 +259,15 @@ def make_report(directory, output, steps=None):
             for r in runs
         )
     ]
+    evaluation = runs[0]["evaluation"]
+    selection = evaluation.get("selection")
+    saved_policy = "selected checkpoint" if selection else "final checkpoint"
     (output / "report_notes.txt").write_text(
         f"Completed unique runs: {len(runs)}\nMissing main-grid runs: {missing}\n"
         f"Missing ablation runs (phi, seed): {missing_phi}\n"
-        f"Training steps per run: {runs[0]['steps']}; evaluation episodes: {runs[0]['evaluation']['episodes']}\n"
-        "Tables: final policy, mean ± sample std across seeds. One seed: std=N/A.\n"
+        f"Training steps per run: {runs[0]['steps']}; validation episodes: {evaluation['episodes']}; "
+        f"test episodes: {evaluation.get('test_episodes', evaluation['episodes'])}\n"
+        f"Tables: {saved_policy}, mean ± sample std across seeds. One seed: std=N/A.\n"
         "Q(dataset) uses dataset states; compare Q(start) with measured G0.\n"
         "G0 stops at the 120-step horizon; Bellman targets bootstrap at dataset timeouts.\n"
         "Generalization: new start/goal pairs near the original regions, not arbitrary maps.\n",
@@ -313,8 +317,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Aggregate independent seeds and plot offline navigation experiments."
     )
-    parser.add_argument("--runs-dir", type=Path, default=RESULTS_DIR / "runs")
-    parser.add_argument("--output-dir", type=Path, default=RESULTS_DIR / "report")
+    parser.add_argument("--runs-dir", type=Path, default=EXPERIMENT_DIR / "runs")
+    parser.add_argument("--output-dir", type=Path, default=EXPERIMENT_DIR / "report")
     parser.add_argument("--steps", type=int)
     args = parser.parse_args()
     make_report(args.runs_dir, args.output_dir, args.steps)

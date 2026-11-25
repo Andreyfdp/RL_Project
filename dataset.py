@@ -1,5 +1,17 @@
+import hashlib
+from zipfile import ZipFile
+
 import numpy as np
 import torch
+
+
+def dataset_digest(path):
+    digest = hashlib.sha256()
+    with ZipFile(path) as archive:
+        for name in sorted(archive.namelist()):
+            digest.update(name.encode("utf-8") + b"\0")
+            digest.update(archive.read(name))
+    return digest.hexdigest()
 
 
 class OfflineDataset:

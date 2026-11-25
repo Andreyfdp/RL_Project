@@ -48,7 +48,9 @@ python train.py --algo td3 --dataset data/noisy.npz --seed 2 --steps 100000
 BC fits dataset actions with MSE. Offline TD3 has no behavior constraint and uses
 target smoothing (noise 0.2, clip 0.5), twin critics, and policy delay 2.
 BCQ combines a conditional VAE, bounded perturbations and twin critics.
-All runs use their full budget without early stopping; tables use the final policy.
+All runs use the configured training budget. The checkpoint with the highest
+validation success rate is selected. Mean validation reward breaks ties, and an
+exact tie keeps the earlier checkpoint.
 
 Every 5,000 updates and at the final step, the run records:
 
@@ -66,19 +68,22 @@ BC has no critic, so its Q fields are `null`. Compare `q_start` with
 `discounted_return`; `q_dataset` uses a different state distribution.
 Measured returns stop at the episode horizon of 120 steps without a bootstrap.
 
-Evaluation uses 30 episodes and fixed task seeds. It restores the training RNG state.
-Run metadata includes probe indices, dataset SHA256, hyperparameters and evaluation settings.
+Validation uses 30 episodes on fixed task seeds. Each selected checkpoint is
+tested on 100 independently seeded episodes with the original goal and 100
+with new start and goal positions. Evaluation restores the training RNG state.
+Run metadata includes the selected step, probe indices, a SHA-256 digest of the
+dataset arrays, hyperparameters, and evaluation settings.
 
 ```text
-results/runs/bcq_mixed_seed0.json
-checkpoints/runs/bcq_mixed_seed0_final.pt
+results/experiments/runs/bcq_mixed_seed0.json
+checkpoints/runs/bcq_mixed_seed0_best.pt
 ```
 
 Nondefault Phi values add a suffix such as `_phi0.25`. Repeated runs receive
 `_repeat1`, `_repeat2`, etc. Logs are written atomically and record
 `running`, `completed` or `failed` status.
 
-Other options: `--eval-episodes`, `--eval-interval`, `--batch-size`, `--probe-size`,
+Other options: `--eval-episodes`, `--eval-interval`, `--test-episodes`, `--batch-size`, `--probe-size`,
 `--threads`, `--results-dir`, and `--checkpoint-dir`.
 
 ## Experiment Suites
@@ -88,19 +93,20 @@ python run_experiments.py --suite main --steps 100000
 python run_experiments.py --suite ablation --steps 100000
 ```
 
-Run both suites:
+Reproduce the 2,000-update benchmark:
 
 ```bash
-python run_experiments.py --suite all --steps 100000
-python make_report.py
+python run_experiments.py --suite all --steps 2000 --eval-interval 1000 --device cpu --workers 4 --results-dir results/benchmark/runs --checkpoint-dir checkpoints/benchmark
+python make_report.py --runs-dir results/benchmark/runs --output-dir results/benchmark/report --steps 2000
 ```
 
 The main grid has 36 runs: `{BC, TD3, BCQ} x {easy, noisy, mixed, small} x {0, 1, 2}`.
 The ablation evaluates BCQ on mixed data at Phi values `0, 0.05, 0.1, 0.25, 0.5, 1.0`.
 Both suites share three Phi=0.05 runs, giving 51 unique experiments.
 
-Use `--dry-run` to inspect the grid. Options include `--seeds`, `--device`,
-`--eval-episodes`, `--data-dir`, `--results-dir`, and `--checkpoint-dir`.
+Use `--dry-run` to inspect the grid. Supply `--device cpu --workers N`
+for parallel CPU runs. For a different training budget or validation interval,
+use a separate results directory.
 Repeating a command skips completed compatible runs. Interrupted runs restart
 from scratch under a new filename.
 
@@ -110,7 +116,7 @@ Training datasets use the fixed goal `(9, 9)`. Results are stored in `generaliza
 
 ## Reports
 
-`make_report.py` writes these files to `results/report/`:
+`make_report.py` writes these files to the report directory:
 
 | Files | Content |
 |---|---|
@@ -127,27 +133,15 @@ Repeated seeds count once, using the latest completed run. Incompatible budgets,
 evaluation protocols or dataset contents cannot be mixed. Use `--steps`,
 `--runs-dir` and `--output-dir` to select a separate series.
 
-## Notebook and Presentation Files
+## Notebook
 
 `BCQ_Offline_Navigation_Demo.ipynb` includes Colab setup with `git clone`, a real
 transition walkthrough, VAE/actor/critic values before and after updates,
-experiment plots, and an embedded navigation animation. Outputs are saved.
+and benchmark tables and plots. Outputs are saved.
 
 ```bash
 python build_notebook.py --execute
 ```
-
-The animation uses the historical `checkpoints/bcq_final.pt` when available.
-That checkpoint is excluded from the new comparison. If only smoke results exist,
-the notebook labels them explicitly.
-
-| Submission item | Project files |
-|---|---|
-| Presentation slides | Not created; use this README, notebook and result plots |
-| Demo video | `demo.py` creates `results/bcq_demo.gif`; MP4 is not created |
-| Source code | All `.py` files and `requirements.txt` |
-| Algorithm update example | `BCQ_Offline_Navigation_Demo.ipynb` with saved outputs |
-| Submission ZIP | Not created |
 
 ## Verification
 
@@ -156,9 +150,8 @@ python -m unittest -v test_experiments
 python run_experiments.py --suite all --dry-run
 ```
 
-All 51 smoke experiments completed with **100 updates and 2 evaluation episodes**.
-Artifacts are in `results/smoke_suite/`, ignored by Git. These validate execution,
-not converged performance. The full 100,000-update suite has not been run.
+The benchmark run logs and report are in `results/benchmark/`. The training
+budget and validation frequency are recorded in each log.
 
 ## Source Files
 

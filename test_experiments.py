@@ -136,8 +136,12 @@ class ExperimentTests(unittest.TestCase):
                     str(DATA_DIR / "small.npz"),
                     "--steps",
                     "2",
+                    "--eval-interval",
+                    "1",
                     "--eval-episodes",
                     "1",
+                    "--test-episodes",
+                    "3",
                     "--probe-size",
                     "4",
                     "--results-dir",
@@ -155,6 +159,18 @@ class ExperimentTests(unittest.TestCase):
             self.assertTrue(Path(first["checkpoint"]).exists())
             self.assertEqual(first["status"], "completed")
             self.assertEqual(first["probe_indices"], second["probe_indices"])
+            best = max(
+                first["history"], key=lambda row: (row["success_rate"], row["average_reward"])
+            )
+            self.assertEqual(first["selected_step"], best["step"])
+            self.assertEqual(first["final"]["episodes"], 3)
+            self.assertEqual(first["generalization"]["episodes"], 3)
+            evaluation = first["evaluation"]
+            self.assertEqual(
+                len({evaluation["seed"], evaluation["test_seed"], evaluation["generalization_seed"]}),
+                3,
+            )
+            self.assertEqual(first["final"], second["final"])
             second["steps"] = 3
             second_path.write_text(json.dumps(second))
             with self.assertRaisesRegex(ValueError, "Incompatible"):
