@@ -1,0 +1,8 @@
+Completed unique runs: 1
+Missing main-grid runs: [('bc', 'easy', 0), ('bc', 'easy', 1), ('bc', 'easy', 2), ('bc', 'noisy', 0), ('bc', 'noisy', 1), ('bc', 'noisy', 2), ('bc', 'mixed', 0), ('bc', 'mixed', 1), ('bc', 'mixed', 2), ('bc', 'small', 0), ('bc', 'small', 1), ('bc', 'small', 2), ('td3', 'easy', 0), ('td3', 'easy', 1), ('td3', 'easy', 2), ('td3', 'noisy', 0), ('td3', 'noisy', 1), ('td3', 'noisy', 2), ('td3', 'mixed', 0), ('td3', 'mixed', 1), ('td3', 'mixed', 2), ('td3', 'small', 0), ('td3', 'small', 1), ('td3', 'small', 2), ('bcq', 'easy', 0), ('bcq', 'easy', 1), ('bcq', 'easy', 2), ('bcq', 'noisy', 0), ('bcq', 'noisy', 1), ('bcq', 'noisy', 2), ('bcq', 'mixed', 1), ('bcq', 'mixed', 2), ('bcq', 'small', 0), ('bcq', 'small', 1), ('bcq', 'small', 2)]
+Missing ablation runs (phi, seed): [(0, 0), (0, 1), (0, 2), (0.05, 1), (0.05, 2), (0.1, 0), (0.1, 1), (0.1, 2), (0.25, 0), (0.25, 1), (0.25, 2), (0.5, 0), (0.5, 1), (0.5, 2), (1, 0), (1, 1), (1, 2)]
+Training steps per run: 100000; evaluation episodes: 30
+Tables: final policy, mean ± sample std across seeds. One seed: std=N/A.
+Q(dataset) uses dataset states; compare Q(start) with measured G0.
+G0 stops at the 120-step horizon; Bellman targets bootstrap at dataset timeouts.
+Generalization: new start/goal pairs near the original regions, not arbitrary maps.
